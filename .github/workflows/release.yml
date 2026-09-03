@@ -1,0 +1,467 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*.*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and publish'
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  #  Manual runs supply the version through the tag input.
+  BLR_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  #  Package once for all release jobs.
+  sources:
+    name: Build sources
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install the archivers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils zstd zip
+
+      - name: Regenerate the ChangeLog from the git history
+        run: |
+          contrib/gitlog-to-changelog --format='%s%n%n%b%n' > ChangeLog.tmp
+          mv ChangeLog.tmp ChangeLog
+          head -20 ChangeLog
+
+      - name: Bootstrap and configure
+        run: ./bootstrap && ./configure
+
+      - name: Build the source packages
+        run: |
+          pkg=$(sed -n 's/^PACKAGE_VERSION = //p' Makefile)
+          test "$pkg" = "$BLR_VERSION" || \
+            echo "::warning::tag $BLR_VERSION but configure.ac says $pkg"
+          make VERSION="$BLR_VERSION" dist
+          make VERSION="$BLR_VERSION" dist-zip
+          gzip -dk "balrogg-$BLR_VERSION.tar.gz"
+          zstd -19 -k "balrogg-$BLR_VERSION.tar"
+          ls -l "balrogg-$BLR_VERSION".*
+
+      - name: Upload the source package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: |
+            balrogg-${{ env.BLR_VERSION }}.tar
+            balrogg-${{ env.BLR_VERSION }}.tar.bz2
+            balrogg-${{ env.BLR_VERSION }}.tar.gz
+            balrogg-${{ env.BLR_VERSION }}.tar.xz
+            balrogg-${{ env.BLR_VERSION }}.tar.zst
+            balrogg-${{ env.BLR_VERSION }}.zip
+
+  #  Statically linked Windows binaries.
+  windows:
+    name: Build Windows ${{ matrix.target.name }}
+    needs: [ sources ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64
+            host: x86_64-w64-mingw32
+            packages: gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          - name: i686
+            host: i686-w64-mingw32
+            packages: gcc-mingw-w64-i686 binutils-mingw-w64-i686
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Install the cross-toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.target.packages }}
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc \
+                      --bindir=/ --program-suffix=-${{ matrix.target.name }} \
+                      CFLAGS="-O2 -g" LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Stage the binary
+        run: |
+          make DESTDIR="$PWD/output" install-exec
+          binary=output/balrogg-${{ matrix.target.name }}.exe
+          debug=output/balrogg-${{ matrix.target.name }}.dbg
+          objcopy=${{ matrix.target.host }}-objcopy
+          strip=${{ matrix.target.host }}-strip
+          "$objcopy" --only-keep-debug "$binary" "$debug"
+          "$strip" --strip-all "$binary"
+          ( cd output && "$objcopy" \
+              --add-gnu-debuglink=balrogg-${{ matrix.target.name }}.dbg \
+              balrogg-${{ matrix.target.name }}.exe )
+          ls -l output
+
+      - name: Upload the Windows build
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-win-${{ matrix.target.name }}-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: output
+
+  #  Run the complete suite against each exact Windows release image.
+  windows-test:
+    name: Test Windows ${{ matrix.target.name }}
+    needs: [ sources, windows ]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64
+            msystem: UCRT64
+            host: x86_64-w64-mingw32
+            toolchain: mingw-w64-ucrt-x86_64-gcc
+          - name: i686
+            msystem: MINGW32
+            host: i686-w64-mingw32
+            toolchain: mingw-w64-i686-gcc
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Download the Windows build
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-release-win-${{ matrix.target.name }}-${{ env.BLR_VERSION }}
+          path: target
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{ matrix.target.msystem }}
+          install: >-
+            make tar gzip diffutils coreutils grep sed gawk
+            ${{ matrix.target.toolchain }}
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Build the test harness
+        run: |
+          ./configure --build="`sh ./config.guess`" \
+                      --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc LDFLAGS=-static
+          make -j4 test-programs
+
+      - name: Full test suite
+        run: |
+          binary=`cd target && pwd`/balrogg-${{ matrix.target.name }}.exe
+          chmod +x "$binary"
+          VERBOSE=1 make -j4 check BLR_TEST_BINARY="$binary"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  Linux binaries built on the oldest supported image.
+  linux:
+    name: Build Linux ${{ matrix.target.name }}
+    needs: [ sources ]
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64
+            runner: ubuntu-22.04
+          - name: aarch64
+            runner: ubuntu-22.04-arm
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --bindir=/ --program-suffix=-linux-${{ matrix.target.name }} \
+                      CFLAGS="-O2 -g" LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Full test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+      - name: Stage the binary
+        run: |
+          make DESTDIR="$PWD/output" install-exec
+          binary=output/balrogg-linux-${{ matrix.target.name }}
+          debug=output/balrogg-linux-${{ matrix.target.name }}.dbg
+          file "$binary"
+          if readelf -l "$binary" | grep -q 'Requesting program interpreter'; then
+            echo "release binary has an ELF interpreter" >&2
+            exit 1
+          fi
+          objcopy --only-keep-debug "$binary" "$debug"
+          strip --strip-all "$binary"
+          ( cd output && objcopy \
+              --add-gnu-debuglink=balrogg-linux-${{ matrix.target.name }}.dbg \
+              balrogg-linux-${{ matrix.target.name }} )
+          ls -l output
+
+      - name: Upload the Linux build
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-linux-${{ matrix.target.name }}-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: output
+
+  #  Statically linked Linux binaries for foreign architectures.
+  linux-cross:
+    name: Build Linux ${{ matrix.target.arch }}
+    needs: [ sources ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - arch: ppc64le
+            host: powerpc64le-linux-gnu
+            qemu: ppc64le
+            libc: ppc64el
+          - arch: riscv64
+            host: riscv64-linux-gnu
+            qemu: riscv64
+            libc: riscv64
+          - arch: s390x
+            host: s390x-linux-gnu
+            qemu: s390x
+            libc: s390x
+          - arch: armhf
+            host: arm-linux-gnueabihf
+            qemu: arm
+            libc: armhf
+    env:
+      QEMU: qemu-${{ matrix.target.qemu }}-static
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Install the cross-toolchain and QEMU
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static \
+            gcc-${{ matrix.target.host }} \
+            libc6-dev-${{ matrix.target.libc }}-cross
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc \
+                      --bindir=/ \
+                      --program-suffix=-linux-${{ matrix.target.arch }} \
+                      CFLAGS="-O2 -g" LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Write the launcher
+        run: |
+          mkdir qw
+          printf '#!/bin/sh\nexec %s "%s" "$@"\n' \
+            "$QEMU" "$PWD/balrogg" > qw/balrogg
+          chmod +x qw/balrogg
+          ./qw/balrogg --version
+
+      - name: Full test suite under QEMU
+        run: |
+          VERBOSE=1 make -j4 check LOG_COMPILER="$QEMU" \
+            BLR_TEST_BINARY="$PWD/qw/balrogg"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+      - name: Stage the binary
+        run: |
+          make DESTDIR="$PWD/output" install-exec
+          binary=output/balrogg-linux-${{ matrix.target.arch }}
+          debug=$binary.dbg
+          tools=${{ matrix.target.host }}
+          file "$binary"
+          "$tools-objcopy" --only-keep-debug "$binary" "$debug"
+          "$tools-strip" --strip-all "$binary"
+          ( cd output && "$tools-objcopy" \
+              --add-gnu-debuglink=balrogg-linux-${{ matrix.target.arch }}.dbg \
+              balrogg-linux-${{ matrix.target.arch }} )
+          ls -l output
+
+      - name: Upload the cross-built Linux build
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-linux-${{ matrix.target.arch }}-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: output
+
+  #  Unsigned macOS binaries.
+  macos:
+    name: Build macOS ${{ matrix.target.name }}
+    needs: [ sources ]
+    runs-on: ${{ matrix.target.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: arm64
+            runner: macos-latest
+          - name: x86_64
+            runner: macos-26-intel
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          #  Apple does not provide a static libSystem.
+          ./configure --bindir=/ --program-suffix=-macos-${{ matrix.target.name }} \
+                      CC=clang CFLAGS="-O2 -g"
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Full test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+      - name: Stage the binary
+        run: |
+          make DESTDIR="$PWD/output" install-exec
+          binary=output/balrogg-macos-${{ matrix.target.name }}
+          dsymutil "$binary" -o "$binary.dSYM"
+          strip -S -x "$binary"
+          ls -l output
+
+      - name: Upload the macOS build
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-macos-${{ matrix.target.name }}-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: output
+
+  #  Publish once, after every binary has been built and tested.
+  publish:
+    name: Publish the release
+    needs: [ sources, windows-test, linux, linux-cross, macos ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all release artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+
+      - name: Install the zip archiver
+        run: sudo apt-get update && sudo apt-get install -y zip
+
+      - name: Assemble the release
+        run: |
+          mkdir release debug
+
+          cp "artifacts/balrogg-$BLR_VERSION/balrogg-$BLR_VERSION".* release/
+
+          cp "artifacts/balrogg-release-win-x86_64-$BLR_VERSION/balrogg-x86_64.exe" release/
+          cp "artifacts/balrogg-release-win-i686-$BLR_VERSION/balrogg-i686.exe" release/
+          cp "artifacts/balrogg-release-linux-x86_64-$BLR_VERSION/balrogg-linux-x86_64" release/
+          cp "artifacts/balrogg-release-linux-aarch64-$BLR_VERSION/balrogg-linux-aarch64" release/
+          cp "artifacts/balrogg-release-linux-ppc64le-$BLR_VERSION/balrogg-linux-ppc64le" release/
+          cp "artifacts/balrogg-release-linux-riscv64-$BLR_VERSION/balrogg-linux-riscv64" release/
+          cp "artifacts/balrogg-release-linux-s390x-$BLR_VERSION/balrogg-linux-s390x" release/
+          cp "artifacts/balrogg-release-linux-armhf-$BLR_VERSION/balrogg-linux-armhf" release/
+          cp "artifacts/balrogg-release-macos-arm64-$BLR_VERSION/balrogg-macos-arm64" release/
+          cp "artifacts/balrogg-release-macos-x86_64-$BLR_VERSION/balrogg-macos-x86_64" release/
+
+          cp artifacts/balrogg-release-win-*-"$BLR_VERSION"/*.dbg debug/
+          cp artifacts/balrogg-release-linux-*-"$BLR_VERSION"/*.dbg debug/
+          cp -R artifacts/balrogg-release-macos-*-"$BLR_VERSION"/*.dSYM debug/
+
+          test "$(find debug -name '*.dbg' -type f | wc -l)" -eq 8
+          test "$(find debug -name '*.dSYM' -type d | wc -l)" -eq 2
+          ( cd debug && zip -9 -r \
+              "../release/balrogg-$BLR_VERSION-debug-symbols.zip" . )
+
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 17
+          ls -l release
+
+      - name: Upload the complete release artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: release
+
+      - name: Publish the release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ env.BLR_VERSION }}
+          overwrite_files: true
+          files: release/*

@@ -1,0 +1,443 @@
+name: Build
+
+on:
+  push:
+    branches: [ '**' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  #  Build every target from the same source package.
+  dist:
+    name: Package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Bootstrap and configure
+        run: ./bootstrap && ./configure
+
+      - name: Make source package
+        run: make VERSION=${{ github.sha }} dist-gzip
+
+      - name: Upload source package artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+          path: balrogg-${{ github.sha }}.tar.gz
+
+      - name: Run distcheck
+        run: make distcheck
+
+  #  Linux compiler and sanitizer matrix.
+  linux:
+    name: Linux ${{ matrix.cc }} ${{ matrix.san }}
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=${{ matrix.cc }}
+          else
+            ./configure CC=${{ matrix.cc }} \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
+          fi
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  Exercise allocation overflow guards on a 32-bit host.
+  linux-i386:
+    name: Linux i386 (32-bit)
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Install the 32-bit toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-multilib
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: ./configure --host=i686-pc-linux-gnu CC="gcc -m32"
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Confirm the binary is 32-bit
+        run: |
+          file balrogg
+          file balrogg | grep -q 'ELF 32-bit' \
+            || { echo "not a 32-bit build"; exit 1; }
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  aarch64 on native hardware.
+  linux-aarch64:
+    name: Linux aarch64 ${{ matrix.cc }} ${{ matrix.san }}
+    needs: [ dist ]
+    runs-on: ubuntu-24.04-arm
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [ gcc, clang ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1:detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=${{ matrix.cc }}
+          else
+            ./configure CC=${{ matrix.cc }} \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
+          fi
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  macOS on both architectures.
+  macos:
+    name: macOS ${{ matrix.os }} ${{ matrix.san }}
+    needs: [ dist ]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ macos-latest, macos-26-intel ]
+        san: [ none, sanitized ]
+    env:
+      ASAN_OPTIONS: abort_on_error=1:halt_on_error=1
+      UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          if [ "${{ matrix.san }}" = none ]; then
+            ./configure CC=clang
+          else
+            ./configure CC=clang \
+              --enable-sanitizers=address,undefined CFLAGS="-O1 -g"
+          fi
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  Native 32- and 64-bit Windows through MSYS2.
+  windows:
+    name: Windows ${{ matrix.msystem }}
+    needs: [ dist ]
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - msystem: UCRT64
+            toolchain: mingw-w64-ucrt-x86_64-gcc
+            host: x86_64-w64-mingw32
+          - msystem: MINGW32
+            toolchain: mingw-w64-i686-gcc
+            host: i686-w64-mingw32
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{ matrix.msystem }}
+          install: >-
+            make tar gzip diffutils coreutils grep sed gawk
+            ${{ matrix.toolchain }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --build="`sh ./config.guess`" \
+                      --host=${{ matrix.host }} \
+                      CC=${{ matrix.host }}-gcc LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Test suite
+        run: VERBOSE=1 make -j4 check
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  Cross-build Windows binaries; the next job runs them.
+  windows-cross:
+    name: Windows cross ${{ matrix.target.name }}
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64
+            host: x86_64-w64-mingw32
+            packages: gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          - name: i686
+            host: i686-w64-mingw32
+            packages: gcc-mingw-w64-i686 binutils-mingw-w64-i686
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Install the cross-toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ${{ matrix.target.packages }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc \
+                      CFLAGS="-O2 -g" LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Upload the binary
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-win-${{ matrix.target.name }}-${{ github.sha }}
+          path: balrogg.exe
+
+  #  Run the cross-built binaries on Windows.
+  windows-cross-test:
+    name: Windows run ${{ matrix.name }}
+    needs: [ dist, windows-cross ]
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: x86_64
+            msystem: UCRT64
+            host: x86_64-w64-mingw32
+            toolchain: mingw-w64-ucrt-x86_64-gcc
+          - name: i686
+            msystem: MINGW32
+            host: i686-w64-mingw32
+            toolchain: mingw-w64-i686-gcc
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+      - name: Download the cross-built binary
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-win-${{ matrix.name }}-${{ github.sha }}
+          path: bin
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          msystem: ${{ matrix.msystem }}
+          install: >-
+            make tar gzip diffutils coreutils grep sed gawk
+            ${{ matrix.toolchain }}
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      #  The suite links the code under test itself; the binary under every
+      #  command-line test is the artifact.
+      - name: Build the test harness and run it against the artifact
+        run: |
+          ./configure --build="`sh ./config.guess`" \
+                      --host=${{ matrix.host }} \
+                      CC=${{ matrix.host }}-gcc LDFLAGS=-static
+          make -j4 test-programs
+          chmod +x bin/balrogg.exe
+          bin=`cd bin && pwd`/balrogg.exe
+          VERBOSE=1 make -j4 check BLR_TEST_BINARY="$bin"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
+  #  Foreign architectures under qemu-user, including big-endian s390x.
+  cross:
+    name: Cross ${{ matrix.target.arch }}
+    needs: [ dist ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - arch: ppc64le
+            host: powerpc64le-linux-gnu
+            qemu: ppc64le
+            libc: ppc64el
+          - arch: riscv64
+            host: riscv64-linux-gnu
+            qemu: riscv64
+            libc: riscv64
+          - arch: s390x
+            host: s390x-linux-gnu
+            qemu: s390x
+            libc: s390x
+          - arch: armhf
+            host: arm-linux-gnueabihf
+            qemu: arm
+            libc: armhf
+    env:
+      QEMU: qemu-${{ matrix.target.qemu }}-static
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Install the cross-toolchain and qemu-user
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-user-static \
+            gcc-${{ matrix.target.host }} \
+            libc6-dev-${{ matrix.target.libc }}-cross
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: |
+          ./configure --host=${{ matrix.target.host }} \
+                      CC=${{ matrix.target.host }}-gcc \
+                      CFLAGS=-O2 LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      #  Invoke qemu directly; do not depend on binfmt_misc.
+      - name: Write the qemu launcher
+        run: |
+          file balrogg
+          mkdir qw
+          printf '#!/bin/sh\nexec %s "%s" "$@"\n' "$QEMU" "$PWD/balrogg" > qw/balrogg
+          chmod +x qw/balrogg
+          ./qw/balrogg --version
+
+      #  The suite runs under qemu and reaches the binary through qw/balrogg.
+      - name: Test suite under qemu
+        run: |
+          make -j4 check VERBOSE=1 LOG_COMPILER="$QEMU" \
+                         BLR_TEST_BINARY="$PWD/qw/balrogg"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
