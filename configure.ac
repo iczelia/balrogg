@@ -66,7 +66,10 @@ if test "x$blr_is_dos" = "xyes"; then
   AC_DEFINE([BLR_DOS], [1], [Define on MS-DOS/DJGPP hosts])
   dnl  DJGPP hides POSIX and DOS declarations behind __STRICT_ANSI__.
   BLR_DOS_CPPFLAGS="-U__STRICT_ANSI__"
-  BLR_DOS_CFLAGS="-march=i386 -mtune=i386 -ffunction-sections -fdata-sections"
+  dnl  The DJGPP linker script has no rule for .bss.* sections, so under
+  dnl  -fdata-sections every zero-initialised array is placed in .data with
+  dnl  contents and the image carries megabytes of zeros.
+  BLR_DOS_CFLAGS="-march=i386 -mtune=i386 -ffunction-sections"
   BLR_DOS_LDFLAGS="-Wl,--gc-sections"
 fi
 AC_SUBST([BLR_DOS_CPPFLAGS])
