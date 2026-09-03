@@ -31,7 +31,9 @@ jobs:
       - name: Install the archivers
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils zstd zip
+          sudo apt-get install -y bzip3 xz-utils zstd zip
+          bzip3 --version
+          xz --version
 
       - name: Regenerate the ChangeLog from the git history
         run: |
@@ -50,6 +52,7 @@ jobs:
           make VERSION="$BLR_VERSION" dist
           make VERSION="$BLR_VERSION" dist-zip
           gzip -dk "balrogg-$BLR_VERSION.tar.gz"
+          bzip3 -k "balrogg-$BLR_VERSION.tar"
           zstd -19 -k "balrogg-$BLR_VERSION.tar"
           ls -l "balrogg-$BLR_VERSION".*
 
@@ -60,6 +63,8 @@ jobs:
           if-no-files-found: error
           path: |
             balrogg-${{ env.BLR_VERSION }}.tar
+            balrogg-${{ env.BLR_VERSION }}.tar.bz2
+            balrogg-${{ env.BLR_VERSION }}.tar.bz3
             balrogg-${{ env.BLR_VERSION }}.tar.gz
             balrogg-${{ env.BLR_VERSION }}.tar.xz
             balrogg-${{ env.BLR_VERSION }}.tar.zst
@@ -138,6 +143,7 @@ jobs:
               /bin/bash contrib/check-win95-pe.sh \
               "$binary" config.h "$debug"
           fi
+          cp config.h output/config.h
           ls -l output
 
       - name: Upload the Windows build
@@ -152,7 +158,7 @@ jobs:
     name: Test Windows ${{ matrix.target.name }}
     needs: [ sources, windows ]
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     defaults:
       run:
         shell: msys2 {0}
@@ -265,6 +271,10 @@ jobs:
             echo "release binary has an ELF interpreter" >&2
             exit 1
           fi
+          if readelf -d "$binary" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "release binary has dynamic dependencies" >&2
+            exit 1
+          fi
           objcopy --only-keep-debug "$binary" "$debug"
           strip --strip-all "$binary"
           ( cd output && objcopy \
@@ -361,6 +371,15 @@ jobs:
           debug=$binary.dbg
           tools=${{ matrix.target.host }}
           file "$binary"
+          if "$tools-readelf" -l "$binary" \
+               | grep -q 'Requesting program interpreter'; then
+            echo "release binary has an ELF interpreter" >&2
+            exit 1
+          fi
+          if "$tools-readelf" -d "$binary" 2>/dev/null | grep -q '(NEEDED)'; then
+            echo "release binary has dynamic dependencies" >&2
+            exit 1
+          fi
           "$tools-objcopy" --only-keep-debug "$binary" "$debug"
           "$tools-strip" --strip-all "$binary"
           ( cd output && "$tools-objcopy" \
@@ -559,8 +578,8 @@ jobs:
           ( cd debug && zip -9 -r \
               "../release/balrogg-$BLR_VERSION-debug-symbols.zip" . )
 
-          #  5 source packages, 12 binaries, and the debug bundle.
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 18
+          #  7 source packages, 12 binaries, and the debug bundle.
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 20
           ls -l release
 
       - name: Upload the complete release artifact
@@ -576,3 +595,23 @@ jobs:
           tag_name: ${{ env.BLR_VERSION }}
           overwrite_files: true
           files: release/*
+
+      #  Debug symbols ship only inside the bundle; drop any loose copies
+      #  left on the release by an earlier run.
+      - name: Remove separately published debug symbols
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          assets=$(gh release view "$BLR_VERSION" --json assets \
+            --jq '.assets[].name')
+          for asset in \
+            balrogg-x86_64.dbg balrogg-i686.dbg balrogg-i686-win95.dbg \
+            balrogg-linux-x86_64.dbg balrogg-linux-aarch64.dbg \
+            balrogg-linux-ppc64le.dbg balrogg-linux-riscv64.dbg \
+            balrogg-linux-s390x.dbg balrogg-linux-armhf.dbg balrogg-dos.dbg \
+            balrogg-macos-arm64.dSYM.zip balrogg-macos-x86_64.dSYM.zip
+          do
+            printf '%s\n' "$assets" | grep -Fxq "$asset" || continue
+            gh release delete-asset "$BLR_VERSION" "$asset" --yes
+          done

@@ -24,7 +24,7 @@ AC_LANG([C])
 AC_CONFIG_MACRO_DIR([m4])
 
 AC_CANONICAL_HOST
-AM_INIT_AUTOMAKE([-Wall foreign color-tests subdir-objects dist-xz])
+AM_INIT_AUTOMAKE([-Wall foreign color-tests subdir-objects dist-bzip2 dist-xz])
 
 AC_PROG_INSTALL
 AC_PROG_MAKE_SET
