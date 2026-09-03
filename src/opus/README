@@ -1,0 +1,32 @@
+Opus parser
+===========
+
+This directory contains a stripped libopus decoder from commit
+3da9f7a6db1c05c3996cb363a9d1931a978bf1be (2026-06-12).
+Upstream is https://github.com/xiph/opus. The code uses the 3-clause BSD
+license in COPYING.
+
+Balrogg needs the entropy-decoder operations in their original order, but
+does not need decoded audio. Signal processing, concealment, resampling and
+floating-point code have therefore been removed. Branches that control symbol
+reads retain the upstream structure to simplify comparison. The PVQ decoder
+reads each codeword index and stops there: cwrsi(), which upstream uses to
+turn the index into a pulse vector nothing here consumes, is gone.
+
+The files are grouped as follows.
+
+  opusdec.h                 parser API used by opusmode.c
+  opus_dec.c                packet layout and frame dispatch
+  entdec.c                  range-decoder operations routed through the model
+  entcode.*, entenc.*       range coder
+  celt*                     CELT parsing and tables
+  silk*                     SILK parsing and tables
+  arch.h, opus_*.h,
+  os_support.h              shared definitions
+
+Balrogg adds model hooks for the CELT Laplace and angle decoders. The CELT
+parser also records the state needed by the model in the orec_* fields from
+opusent.h.
+
+For validation, compare archives with a full libopus build carrying the same
+hooks. The outputs must be byte-identical.
