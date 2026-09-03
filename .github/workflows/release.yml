@@ -60,7 +60,6 @@ jobs:
           if-no-files-found: error
           path: |
             balrogg-${{ env.BLR_VERSION }}.tar
-            balrogg-${{ env.BLR_VERSION }}.tar.bz2
             balrogg-${{ env.BLR_VERSION }}.tar.gz
             balrogg-${{ env.BLR_VERSION }}.tar.xz
             balrogg-${{ env.BLR_VERSION }}.tar.zst
@@ -78,9 +77,15 @@ jobs:
           - name: x86_64
             host: x86_64-w64-mingw32
             packages: gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+            extra: ""
           - name: i686
             host: i686-w64-mingw32
             packages: gcc-mingw-w64-i686 binutils-mingw-w64-i686
+            extra: ""
+          - name: i686-win95
+            host: i686-w64-mingw32
+            packages: gcc-mingw-w64-i686 binutils-mingw-w64-i686
+            extra: "--with-windows-target=win95"
     steps:
       - name: Download the source package artifact
         uses: actions/download-artifact@v7
@@ -102,11 +107,18 @@ jobs:
         run: |
           ./configure --host=${{ matrix.target.host }} \
                       CC=${{ matrix.target.host }}-gcc \
+                      ${{ matrix.target.extra }} \
                       --bindir=/ --program-suffix=-${{ matrix.target.name }} \
                       CFLAGS="-O2 -g" LDFLAGS=-static
 
       - name: Make
         run: make -j4 all
+
+      - name: Check the Win95 image
+        if: ${{ matrix.target.name == 'i686-win95' }}
+        run: |
+          file balrogg.exe
+          make win95-check
 
       - name: Stage the binary
         run: |
@@ -120,6 +132,12 @@ jobs:
           ( cd output && "$objcopy" \
               --add-gnu-debuglink=balrogg-${{ matrix.target.name }}.dbg \
               balrogg-${{ matrix.target.name }}.exe )
+          if test '${{ matrix.target.name }}' = i686-win95; then
+            OBJDUMP=${{ matrix.target.host }}-objdump \
+            NM=${{ matrix.target.host }}-nm \
+              /bin/bash contrib/check-win95-pe.sh \
+              "$binary" config.h "$debug"
+          fi
           ls -l output
 
       - name: Upload the Windows build
@@ -147,6 +165,10 @@ jobs:
             host: x86_64-w64-mingw32
             toolchain: mingw-w64-ucrt-x86_64-gcc
           - name: i686
+            msystem: MINGW32
+            host: i686-w64-mingw32
+            toolchain: mingw-w64-i686-gcc
+          - name: i686-win95
             msystem: MINGW32
             host: i686-w64-mingw32
             toolchain: mingw-w64-i686-gcc
@@ -409,10 +431,95 @@ jobs:
           if-no-files-found: error
           path: output
 
+  #  MS-DOS binary, tested in a FreeDOS guest.
+  dos:
+    name: Build MS-DOS i386
+    needs: [ sources ]
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      DJGPP_RELEASE: "v3.4"
+      DJGPP_GCC: "1220"
+      FREEDOS_VERSION: "1.4"
+    steps:
+      - name: Download the source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Extract the source package
+        run: |
+          tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Cache the FreeDOS guest
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/balrogg-freedos
+          key: freedos-${{ runner.os }}-${{ runner.arch }}-${{ env.FREEDOS_VERSION }}-${{ hashFiles('contrib/dos/install-freedos.sh') }}
+
+      - name: Install the DJGPP cross-toolchain and FreeDOS guest
+        run: |
+          #  Required by the prebuilt ar and ranlib.
+          sudo apt-get update
+          sudo apt-get install -y libfl2 mtools qemu-system-x86 unzip
+          guest="$HOME/.cache/balrogg-freedos/$FREEDOS_VERSION"
+          contrib/dos/install-freedos.sh "$guest"
+          echo "FREEDOS_ROOT=$guest/share/balrogg-dos" >> "$GITHUB_ENV"
+          if test -e /dev/kvm; then sudo chmod 666 /dev/kvm; fi
+          curl -fL -o /tmp/djgpp.tar.bz2 \
+            "https://github.com/andrewwutw/build-djgpp/releases/download/${DJGPP_RELEASE}/djgpp-linux64-gcc${DJGPP_GCC}.tar.bz2"
+          tar -xjf /tmp/djgpp.tar.bz2 -C "$HOME"
+          echo "$HOME/djgpp/bin" >> "$GITHUB_PATH"
+
+      - name: Build for MS-DOS
+        run: |
+          mkdir build-dos
+          ( cd build-dos && ../configure --host=i586-pc-msdosdjgpp \
+                  --bindir=/ --program-suffix=-dos \
+                  CC=i586-pc-msdosdjgpp-gcc CFLAGS="-O2 -g" \
+              && make -j4 all \
+              && make -j4 test-programs )
+
+      #  objdump provides a stable BFD target name.
+      - name: Verify the DOS binary format
+        run: |
+          file build-dos/balrogg.exe
+          i586-pc-msdosdjgpp-objdump -f build-dos/balrogg.exe
+          i586-pc-msdosdjgpp-objdump -f build-dos/balrogg.exe \
+            | grep -q 'coff-go32-exe'
+
+      - name: Full C suite in FreeDOS
+        run: |
+          sh contrib/dos/run-suite.sh build-dos "$FREEDOS_ROOT" \
+             "$RUNNER_TEMP/dos-suite"
+
+      - name: Show the test logs
+        if: failure()
+        run: cat "$RUNNER_TEMP"/dos-suite/*.log 2>&1 || true
+
+      - name: Stage the binary
+        run: |
+          make -C build-dos DESTDIR="$PWD/output" install-exec
+          i586-pc-msdosdjgpp-objcopy --only-keep-debug \
+            output/balrogg-dos.exe output/balrogg-dos.dbg
+          i586-pc-msdosdjgpp-strip --strip-all output/balrogg-dos.exe
+          ( cd output && i586-pc-msdosdjgpp-objcopy \
+              --add-gnu-debuglink=balrogg-dos.dbg balrogg-dos.exe )
+          ls -l output
+
+      - name: Upload the DOS build
+        uses: actions/upload-artifact@v7
+        with:
+          name: balrogg-release-dos-i386-${{ env.BLR_VERSION }}
+          if-no-files-found: error
+          path: output
+
   #  Publish once, after every binary has been built and tested.
   publish:
     name: Publish the release
-    needs: [ sources, windows-test, linux, linux-cross, macos ]
+    needs: [ sources, windows-test, linux, linux-cross, macos, dos ]
     runs-on: ubuntu-latest
     steps:
       - name: Download all release artifacts
@@ -431,6 +538,7 @@ jobs:
 
           cp "artifacts/balrogg-release-win-x86_64-$BLR_VERSION/balrogg-x86_64.exe" release/
           cp "artifacts/balrogg-release-win-i686-$BLR_VERSION/balrogg-i686.exe" release/
+          cp "artifacts/balrogg-release-win-i686-win95-$BLR_VERSION/balrogg-i686-win95.exe" release/
           cp "artifacts/balrogg-release-linux-x86_64-$BLR_VERSION/balrogg-linux-x86_64" release/
           cp "artifacts/balrogg-release-linux-aarch64-$BLR_VERSION/balrogg-linux-aarch64" release/
           cp "artifacts/balrogg-release-linux-ppc64le-$BLR_VERSION/balrogg-linux-ppc64le" release/
@@ -439,17 +547,20 @@ jobs:
           cp "artifacts/balrogg-release-linux-armhf-$BLR_VERSION/balrogg-linux-armhf" release/
           cp "artifacts/balrogg-release-macos-arm64-$BLR_VERSION/balrogg-macos-arm64" release/
           cp "artifacts/balrogg-release-macos-x86_64-$BLR_VERSION/balrogg-macos-x86_64" release/
+          cp "artifacts/balrogg-release-dos-i386-$BLR_VERSION/balrogg-dos.exe" release/
 
           cp artifacts/balrogg-release-win-*-"$BLR_VERSION"/*.dbg debug/
           cp artifacts/balrogg-release-linux-*-"$BLR_VERSION"/*.dbg debug/
+          cp artifacts/balrogg-release-dos-i386-"$BLR_VERSION"/*.dbg debug/
           cp -R artifacts/balrogg-release-macos-*-"$BLR_VERSION"/*.dSYM debug/
 
-          test "$(find debug -name '*.dbg' -type f | wc -l)" -eq 8
+          test "$(find debug -name '*.dbg' -type f | wc -l)" -eq 10
           test "$(find debug -name '*.dSYM' -type d | wc -l)" -eq 2
           ( cd debug && zip -9 -r \
               "../release/balrogg-$BLR_VERSION-debug-symbols.zip" . )
 
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 17
+          #  5 source packages, 12 binaries, and the debug bundle.
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 18
           ls -l release
 
       - name: Upload the complete release artifact

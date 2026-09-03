@@ -28,8 +28,12 @@ FLAGS=(-g -O1 -std=c99 -DBLR_FUZZ -DHAVE_CONFIG_H "-I$BUILD" "-I$TOP/src"
        "-fsanitize=fuzzer,address,undefined" -fno-sanitize-recover=all)
 SRC=("$TOP/src/common.c" "$TOP/src/rc.c" "$TOP/src/archive.c"
      "$TOP/src/model.c" "$TOP/src/ogg.c" "$TOP/src/vorbis.c"
-     "$TOP/src/codec.c" "$TOP/src/cm.c")
+     "$TOP/src/codec.c" "$TOP/src/cm.c" "$TOP/src/cmmix.c" "$TOP/src/cpu.c")
 test -f "$BUILD/config.h" || { echo "fuzz/build.sh: no config.h in $BUILD; configure first" >&2;  exit 2; }
+if grep -q '^#define HAVE_SSE2' "$BUILD/config.h"; then
+  "${CC_CMD[@]}" "${FLAGS[@]}" -msse2 -DBLR_CM_SSE2 -c -o cmmix_sse2.o "$TOP/src/cmmix.c"
+  SRC+=(cmmix_sse2.o)
+fi
 for t in dec enc ogg; do
   "${CC_CMD[@]}" "${FLAGS[@]}" -o "fuzz_$t" "fuzz_$t.c" "${SRC[@]}" -lm
 done

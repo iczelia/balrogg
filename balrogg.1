@@ -44,9 +44,8 @@ balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .BR \-h | \-v
 .SH DESCRIPTION
 .B balrogg
-compresses Ogg Vorbis and Opus files losslessly. Expanding an archive restores
-the original bytes. Adaptive models recode entropy-coded fields and omit data
-that can be rebuilt, including checksums and lacing tables.
+losslessly recompresses Ogg Vorbis and Opus files. Expanding an archive restores
+the original bytes.
 .PP
 Both verbs detect the codec from the input.
 .B e
@@ -92,9 +91,8 @@ Every remaining argument is an input. Encoding writes
 .IR file .blr
 beside each input and decoding strips the suffix, or appends
 .B .out
-when there is none. Files run in separate processes, limited by available cores
-and memory. Larger inputs start first. Other files continue after a refusal
-where supported.
+when there is none. Files run in separate processes within CPU and memory
+limits. Larger inputs start first. Remaining files continue after a refusal.
 .TP
 .BR \-j ", " \-\-jobs = \fIN\fR
 Run
@@ -128,6 +126,14 @@ Internal error.
 .B BLR_MEMCAP
 Per-process memory cap in MiB. The default is 2048. A value of 0 disables it.
 Sanitizer builds omit the cap.
+.TP
+.B BLR_SIMD
+Select the context-mixer kernel on x86.
+.B scalar
+forces the portable kernel and
+.B sse2
+refuses to run unless the SSE2 kernel is built and the CPU supports it.
+SSE2 is the default when CPUID reports it.
 .SH LIMITS
 Opus mode supports one mono or stereo logical stream with channel mapping
 family 0. Vorbis floor type 0 and codebook lookup type 2 are unsupported.

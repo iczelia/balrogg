@@ -19,14 +19,23 @@ int main(int argc, char ** argv) {
   xt_init();
   /*  Sections can be picked on the command line for a quicker turn.  */
   if (argc > 1) {
+    int picked = 0;
     for (i = 1; i < argc; i++) {
+      if (!strncmp(argv[i], "--report=", 9)) {
+        if (!xt_open_report(argv[i] + 9)) {
+          fprintf(stderr, "t_suite: cannot open report '%s'\n", argv[i] + 9);
+          return 2;
+        }
+        continue;
+      }
+      picked = 1;
       if (!strcmp(argv[i], "unit")) xt_run_unit();
       else if (!strcmp(argv[i], "layers")) xt_run_layers();
       else if (!strcmp(argv[i], "files")) xt_run_files();
       else if (!strcmp(argv[i], "cli")) xt_run_cli();
       else { fprintf(stderr, "t_suite: unknown section %s\n", argv[i]);  return 2; }
     }
-    return xt_finish("t_suite");
+    if (picked) return xt_finish("t_suite");
   }
   xt_run_unit();
   xt_run_layers();

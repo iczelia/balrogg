@@ -14,16 +14,18 @@
 
 ACLOCAL_AMFLAGS = -I m4
 
-AM_CFLAGS = -std=c99 $(BLR_WARN_CFLAGS) $(BLR_HARDEN_CFLAGS) $(BLR_SAN_CFLAGS)
-AM_LDFLAGS = $(BLR_SAN_LDFLAGS)
-AM_CPPFLAGS = -I$(top_builddir) -I$(top_srcdir)/src
+AM_CFLAGS = -std=c99 $(BLR_WARN_CFLAGS) $(BLR_HARDEN_CFLAGS) $(BLR_SAN_CFLAGS) \
+            $(BLR_WIN_CFLAGS) $(BLR_DOS_CFLAGS)
+AM_LDFLAGS = $(BLR_SAN_LDFLAGS) $(BLR_WIN_LDFLAGS) $(BLR_DOS_LDFLAGS)
+AM_CPPFLAGS = $(BLR_WIN_CPPFLAGS) $(BLR_DOS_CPPFLAGS) -I$(top_builddir) \
+              -I$(top_srcdir)/src
 
 bin_PROGRAMS = balrogg
 dist_man1_MANS = balrogg.1
 noinst_HEADERS = \
   src/common.h src/rc.h src/model.h src/cm.h src/archive.h src/ogg.h \
   src/vorbis.h src/codec.h src/opusmode.h src/opusent.h src/prof.h \
-  src/yarg.h \
+  src/cpu.h src/yarg.h \
   src/opus/opusdec.h src/opus/celt.h src/opus/silk.h src/opus/arch.h \
   src/opus/opus_types.h src/opus/opus_defines.h src/opus/os_support.h \
   src/opus/ecintrin.h src/opus/entcode.h src/opus/entdec.h \
@@ -34,10 +36,29 @@ noinst_LIBRARIES = libbalrogg_core.a
 
 libbalrogg_core_a_SOURCES = \
   src/common.c src/rc.c src/archive.c src/model.c src/ogg.c src/vorbis.c \
-  src/codec.c src/cm.c
+  src/codec.c src/cm.c src/cmmix.c src/cpu.c
 
 balrogg_SOURCES = src/main.c
+balrogg_CFLAGS = $(AM_CFLAGS)
+balrogg_LDFLAGS = $(AM_LDFLAGS)
 balrogg_LDADD = libbalrogg_core.a
+
+if BLR_SSE2
+noinst_LIBRARIES += libbalrogg_sse2.a
+libbalrogg_sse2_a_SOURCES  = src/cmmix.c
+libbalrogg_sse2_a_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_CM_SSE2
+libbalrogg_sse2_a_CFLAGS   = $(AM_CFLAGS) $(BLR_SSE2_CFLAGS)
+balrogg_LDADD += libbalrogg_sse2.a
+endif
+
+##  Windows 95: a freestanding C runtime on KERNEL32 replaces MSVCRT.
+if BLR_WIN_LEGACY
+balrogg_SOURCES += src/win95crt.c
+balrogg_CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
+balrogg_LDFLAGS += -nostartfiles -nodefaultlibs -Wl,-e,_blr_entry \
+                   -static -static-libgcc -Wl,--subsystem,console
+balrogg_LDADD += -lgcc -lkernel32
+endif
 
 ##  Ogg Opus model and bundled parser.
 BLR_OPUS_SOURCES = \
@@ -69,6 +90,13 @@ balrogg_prof_SOURCES  = src/main.c src/prof.c $(libbalrogg_core_a_SOURCES) \
                         src/opusmode.c $(BLR_OPUS_SOURCES)
 balrogg_prof_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_PROFILE $(BLR_OPUS_CPPFLAGS)
 balrogg_prof_LDADD    = -lm
+if BLR_SSE2
+noinst_LIBRARIES += libbalrogg_prof_sse2.a
+libbalrogg_prof_sse2_a_SOURCES  = src/cmmix.c
+libbalrogg_prof_sse2_a_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_PROFILE -DBLR_CM_SSE2
+libbalrogg_prof_sse2_a_CFLAGS   = $(AM_CFLAGS) $(BLR_SSE2_CFLAGS)
+balrogg_prof_LDADD += libbalrogg_prof_sse2.a
+endif
 
 ##  Test suite linked to the library and built binary.
 check_PROGRAMS = tests/t_suite
@@ -77,7 +105,10 @@ TESTS = tests/t_suite
 tests_t_suite_SOURCES = tests/t_suite.c tests/t_harness.c tests/t_unit.c \
                         tests/t_layers.c tests/t_files.c tests/t_cli.c
 tests_t_suite_CPPFLAGS = $(AM_CPPFLAGS) -I$(top_srcdir)/tests
-tests_t_suite_LDADD = $(balrogg_LDADD)
+tests_t_suite_LDADD = libbalrogg_core.a libbalrogg_opus.a
+if BLR_SSE2
+tests_t_suite_LDADD += libbalrogg_sse2.a
+endif
 
 test-programs: tests/t_suite$(EXEEXT)
 
@@ -106,11 +137,15 @@ EXTRA_DIST = \
   fuzz/fuzz_ogg.c fuzz/fuzz_opus.c fuzz/build.sh fuzz/run.sh \
   fuzz/triage.sh fuzz/regress.sh fuzz/mkseeds.py fuzz/mutate.py \
   contrib/mkdata.sh contrib/normalize-ogg.py contrib/corpus-rt.sh \
-  contrib/gitlog-to-changelog
+  contrib/gitlog-to-changelog contrib/check-win95-pe.sh \
+  contrib/dos/fdauto.bat contrib/dos/fdconfig.sys \
+  contrib/dos/install-freedos.sh contrib/dos/qemu-exit.c \
+  contrib/dos/run-suite.sh
 
 VENDORED = src/yarg.h src/opus
 
-.PHONY: check-full check-torture print-distfiles test-programs
+.PHONY: check-full check-torture check-simd win95-check print-distfiles \
+        test-programs
 
 ##  Full tests also scan BLR_TEST_CORPUS.
 check-full:
@@ -118,6 +153,22 @@ check-full:
 
 check-torture:
 	$(MAKE) check BLR_TEST_LEVEL=torture
+
+##  Run the suite once per mixer kernel this host can dispatch.
+check-simd: balrogg$(EXEEXT)
+	@tiers=scalar; \
+	if ./balrogg$(EXEEXT) --version | grep -q 'sse2 dispatched'; then \
+	  tiers="$$tiers sse2"; \
+	fi; \
+	for t in $$tiers; do \
+	  echo "== mixer kernel $$t"; \
+	  BLR_SIMD=$$t $(MAKE) check || exit 1; \
+	done
+
+##  Audit a --with-windows-target=win95 image's PE headers and imports.
+win95-check: balrogg$(EXEEXT)
+	OBJDUMP=$(OBJDUMP) NM=$(NM) $(SHELL) \
+	  $(top_srcdir)/contrib/check-win95-pe.sh ./balrogg$(EXEEXT) ./config.h
 
 ##  Print the files included in the distribution tarball.
 print-distfiles:

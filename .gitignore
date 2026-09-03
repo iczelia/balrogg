@@ -58,3 +58,6 @@ conftest.*
 /fuzz/timeout-*
 
 /.vscode/
+
+/build-dos/
+/fuzz/cmmix_sse2.o

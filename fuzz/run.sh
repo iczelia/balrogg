@@ -1,10 +1,7 @@
 #!/bin/bash
 # fuzz/run.sh <dec|enc|ogg|opus> [seconds] [jobs]
 #
-# Disable leak checks because rejected input exits through longjmp.
-#
-# The RSS limit covers each process, including sanitizer and corpus overhead.
-# The malloc limit applies per allocation and should not exceed BLR_MEMCAP.
+# Rejection uses longjmp, so leak checks are disabled.
 set -u
 cd "$(dirname "$0")" || exit 2
 T=${1:?usage: fuzz/run.sh <dec|enc|ogg|opus> [seconds] [jobs]}

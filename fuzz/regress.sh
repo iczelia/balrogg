@@ -13,8 +13,7 @@
 #  You should have received a copy of the GNU General Public License
 #  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-#  Run tests/regress against a balrogg binary. Accept exit 0 or 1, reject
-#  signals and timeouts, and round-trip any accepted encoder input.
+#  Check clean refusal and round-trip any accepted input.
 #
 #    fuzz/regress.sh [balrogg]
 set -u
@@ -40,7 +39,7 @@ for f in "$D"/*; do
     BLR_MEMCAP=512 "${TIMEOUT[@]}" "$BIN" d "$f" "$T/o" >/dev/null 2>&1
   fi
   rc=$?
-  # 0 means accepted and 1 means refused. Other statuses fail the regression.
+  #  Only success and refusal are valid.
   if [ "$rc" -gt 1 ]; then
     echo "  !! $(basename "$f") exits $rc"
     fail=1

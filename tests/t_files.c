@@ -20,11 +20,11 @@
 #include "codec.h"
 #include "opusmode.h"
 
-/*  The options main.c derives from a level: -1 and -9.  */
+/*  The options main.c derives from levels -1 and -9.  */
 static void level(vb_opt * o, int lev) {
   vb_opt_default(o);
   if (lev == 1) { o->flags = (u8) (o->flags & 0x1F);  o->search = 0; }
-  else { o->flags = (u8) ((o->flags & 0x1F) | (3 << 5));  o->search = 11; }
+  else { o->flags = (u8) ((o->flags & 0x1F) | (3 << 5));  o->search = 12; }
 }
 
 /*  Require parse and re-emission to reproduce the archive.  */
@@ -91,8 +91,10 @@ static void t_opus(void) {
   arcs = xmalloc((sz) (n + 1) * sizeof *arcs);
   /*  Encode at both ends of the effort scale and keep -9 output.  */
   for (i = 0, p = files; *p; p++, i++) {
-    arcs[i] = xmalloc(32);
-    sprintf(arcs[i], "t_suite-o%d.tmp", i);
+    char tag[16];
+    sprintf(tag, "o%d.blr", i);
+    arcs[i] = xmalloc(strlen(xt_tmp(tag)) + 1);
+    strcpy(arcs[i], xt_tmp(tag));
     CHECK(!opus_pack(*p, arcs[i], 0), "%s: encode at depth 0 failed", xt_basename(*p));
     CHECK(!opus_unpack(arcs[i], out), "%s: decode at depth 0 failed", xt_basename(*p));
     CHECK(xt_same_file(*p, out), "%s: not lossless at depth 0", xt_basename(*p));

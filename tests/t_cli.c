@@ -37,6 +37,8 @@ static void t_options(void) {
         && xt_file_contains(log, "Written by Kamila Szewczyk")
         && xt_file_contains(log, "GNU GPL version 3"), "-v banner");
   has_opus = !xt_file_contains(log, "not built");
+  CHECK(xt_file_contains(log, "SIMD: ") && xt_file_contains(log, " dispatched"),
+        "-v names the mixer kernel");
   CHECK(xt_run("--version", log) == 0, "--version");
   CHECK(xt_run("-h", log) == 0 && xt_file_contains(log, "usage:")
         && xt_file_contains(log, "demonically compacting OGG recompressor")
@@ -60,12 +62,12 @@ static void t_options(void) {
 }
 
 static void t_verbs(void) {
-  char args[8192], fx[4096];
+  char args[8192];
+  const char * fx = xt_fixture(xt_data, "tiny.ogg");
   const char * log = xt_tmp("cli.log"), * arc = xt_tmp("cli.blr");
   const char * arc2 = xt_tmp("cli2.blr"), * bad = xt_tmp("bad.opus");
   const char * out = xt_tmp("cli.out");
   xt_section_begin("cli verbs");
-  sprintf(fx, "%s/tiny.ogg", xt_data);
   {
     sz n;
     u8 * original = slurp(fx, &n);
@@ -98,7 +100,7 @@ static void t_verbs(void) {
   CHECK(xt_run(args, log) == BLR_EXIT_IO && xt_file_contains(log, "cannot create"),
         "an unwritable output exits %d", BLR_EXIT_IO);
   if (has_opus) {
-    sprintf(fx, "%s/silk_speech_12k.opus", xt_data);
+    fx = xt_fixture(xt_data, "silk_speech_12k.opus");
     sprintf(args, "e \"%s\" \"%s\"", fx, arc);
     CHECK(xt_run(args, log) == 0, "e on an Opus file");
     sprintf(args, "e \"%s\" \"%s\"", fx, arc2);
@@ -133,18 +135,21 @@ static void t_verbs(void) {
 /*  Encode and decode three fixture copies in place.  */
 static void t_batch(void) {
   static const char * const NAMES[] = { "short.ogg", "chain3.ogg", "silence.ogg" };
-  char args[8192], src[4096], copy[3][64], blr[3][64], log2[64];
-  static const char * small = "t_suite-small.invalid";
-  static const char * large = "t_suite-large.invalid";
-  const char * log = xt_tmp("cli.log");
+  char args[8192], copy[3][64], blr[3][64];
+  const char * src, * small = xt_tmp("small.inv"), * large = xt_tmp("large.inv");
+  const char * log = xt_tmp("cli.log"), * notogg = xt_tmp("notogg.ogg");
   int i, ok = 1;
   xt_section_begin("cli batch");
   for (i = 0; i < 3; i++) {
     sz n;
     u8 * b;
-    sprintf(src, "%s/%s", xt_data, NAMES[i]);
-    sprintf(copy[i], "t_suite-batch%d.ogg", i);
-    sprintf(blr[i], "%s.blr", copy[i]);
+    char tag[16];
+    sprintf(tag, "batch%d.ogg", i);
+    src = xt_fixture(xt_data, NAMES[i]);
+    strcpy(copy[i], xt_tmp(tag));
+    strcpy(blr[i], xt_batch_name(1, copy[i]));
+    CHECK(!strcmp(xt_batch_name(0, blr[i]), copy[i]),
+          "batch names round-trip: %s", copy[i]);
     b = slurp(src, &n);  spew(copy[i], b, n);  free(b);
   }
   sprintf(args, "-b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
@@ -155,19 +160,18 @@ static void t_batch(void) {
   sprintf(args, "-b d %s %s %s", blr[0], blr[1], blr[2]);
   CHECK(xt_run(args, log) == 0, "batch decode");
   for (i = 0; i < 3; i++) {
-    sprintf(src, "%s/%s", xt_data, NAMES[i]);
+    src = xt_fixture(xt_data, NAMES[i]);
     CHECK(xt_same_file(src, copy[i]), "batch decode of %s", NAMES[i]);
     xt_unlink(copy[i]);  xt_unlink(blr[i]);
   }
   /*  A batch with a refused file reports it and carries on.  */
-  sprintf(log2, "t_suite-notogg.ogg");
-  spew(log2, (const u8 *) "not an ogg file at all", 22);
-  sprintf(src, "%s/%s", xt_data, NAMES[0]);
+  spew(notogg, (const u8 *) "not an ogg file at all", 22);
+  src = xt_fixture(xt_data, NAMES[0]);
   { sz n;  u8 * b = slurp(src, &n);  spew(copy[0], b, n);  free(b); }
-  sprintf(args, "-b e %s %s", log2, copy[0]);
+  sprintf(args, "-b e %s %s", notogg, copy[0]);
   CHECK(xt_run(args, log) == BLR_EXIT_REFUSED && xt_file_contains(log, "1 of 2 failed")
         && xt_file_size(blr[0]) > 0, "batch reports the refused file and encodes the rest");
-  xt_unlink(log2);  xt_unlink(copy[0]);  xt_unlink(blr[0]);
+  xt_unlink(notogg);  xt_unlink(copy[0]);  xt_unlink(blr[0]);
 
   { sz n;  u8 * b = slurp(src, &n);  spew(copy[0], b, n);  free(b); }
   sprintf(args, "-b e t_suite-no-such-file.ogg %s", copy[0]);
@@ -185,7 +189,8 @@ static void t_batch(void) {
 }
 
 static void t_regress(void) {
-  char args[8192], path[4096];
+  char args[8192];
+  const char * path;
   const char * log = xt_tmp("cli.log"), * arc = xt_tmp("reg.blr");
   const char * out = xt_tmp("reg.out");
   const char * const * p;
@@ -200,7 +205,7 @@ static void t_regress(void) {
   for (p = REGRESS; *p; p++) {
     sz n = strlen(*p);
     int enc = !(n > 4 && !strcmp(*p + n - 4, ".blr")), rc;
-    sprintf(path, "%s/%s", xt_regress, *p);
+    path = xt_fixture(xt_regress, *p);
     sprintf(args, "%s \"%s\" \"%s\"", enc ? "e" : "d", path, arc);
     rc = xt_run(args, log);
     CHECK(rc == BLR_EXIT_OK || rc == BLR_EXIT_REFUSED, "%s: exit %d", *p, rc);
@@ -219,14 +224,14 @@ static void t_regress(void) {
 
 /*  Reject damaged archives without crashing.  */
 static void t_damaged(void) {
-  char args[8192], fx[4096];
+  char args[8192];
+  const char * fx = xt_fixture(xt_data, "short.ogg");
   const char * log = xt_tmp("cli.log"), * arc = xt_tmp("dmg.blr");
-  const char * bad = xt_tmp("dmg-bad.blr"), * out = xt_tmp("dmg.out");
+  const char * bad = xt_tmp("dmgbad.blr"), * out = xt_tmp("dmg.out");
   static const long CUT[] = { 9, 10, 12, 20, -2, -1 };
   u8 * b;
   sz n, i, k;
   xt_section_begin("cli damaged archives");
-  sprintf(fx, "%s/short.ogg", xt_data);
   sprintf(args, "-2 e \"%s\" \"%s\"", fx, arc);
   if (xt_run(args, log) != 0) { CHECK(0, "encode for the damage test");  return; }
   b = slurp(arc, &n);
@@ -312,7 +317,8 @@ static void merged_link(obuf * o, const u8 * src, sz len, int keep, u32 serial) 
 }
 
 static void t_constructed(void) {
-  char args[8192], fx[4096];
+  char args[8192];
+  const char * fx = xt_fixture(xt_data, "lowbr.ogg");
   const char * log = xt_tmp("cli.log"), * in = xt_tmp("con.ogg");
   const char * arc = xt_tmp("con.blr"), * out = xt_tmp("con.out");
   ogg_page p;
@@ -320,7 +326,6 @@ static void t_constructed(void) {
   u8 * b;
   obuf o;
   xt_section_begin("cli constructed files");
-  sprintf(fx, "%s/lowbr.ogg", xt_data);
   b = slurp(fx, &n);
 
   /*  No end-of-stream page.  */

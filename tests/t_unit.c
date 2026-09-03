@@ -12,16 +12,17 @@
     You should have received a copy of the GNU General Public License
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
-/*  Self-contained range-coder, value-coder, and container tests.  */
+/*  Core unit tests.  */
 
 #include "t_harness.h"
+#include "cm.h"
+#include "cpu.h"
 #include "archive.h"
 #include "model.h"
 #include "ogg.h"
 
 static xt_rng rng;
 
-/*  blr_ilog has a builtin and a loop form; both must agree at the edges.  */
 static void t_ilog(void) {
   static const u32 v[] = { 0, 1, 2, 3, 4, 7, 8, 255, 256, 0x7FFFFFFFUL,
                            0x80000000UL, 0xFFFFFFFFUL };
@@ -44,7 +45,6 @@ static void t_crc(void) {
         "short page accepted by CRC check");
 }
 
-/*  Verify decoder seeding from short streams.  */
 static void t_short_init(void) {
   static const u8 b[4] = { 0x80, 0x12, 0x34, 0x56 };
   static const u32 want[5] = { 0, 0x80000000UL, 0x80120000UL, 0x80123400UL,
@@ -59,7 +59,6 @@ static void t_short_init(void) {
   });
 }
 
-/*  Round-trip normal, saturated, and carry-heavy bit sequences.  */
 static int roundtrip(sz nslots, sz n, int mode) {
   u16 * pe = xmalloc(nslots * sizeof *pe), * pd = xmalloc(nslots * sizeof *pd);
   u8 * slot = xmalloc(n), * bit = xmalloc(n);
@@ -94,7 +93,7 @@ static void t_coder(void) {
 }
 
 /*  The count-capped pair has to agree with itself too, and its clamp has to
-    keep every probability off both rails.  */
+    keep every probability strictly between 0 and 0xFFFF.  */
 static void t_coder_ad(void) {
   enum { N = 20000, NS = 16 };
   u16 pe[NS], pd[NS];
@@ -145,7 +144,6 @@ static void t_varint(void) {
         "varint widths");
 }
 
-/*  Round-trip synthetic containers with varied streams and tune blobs.  */
 static void t_container(void) {
   archive a, b2;
   u8 * img, * blob;
@@ -176,8 +174,6 @@ static void t_container(void) {
         && ARC_LEVEL(0x69) == 3, "flags decoding");
 }
 
-/*  Exercise each value-coder axis and compare both output and model state.  */
-
 static const mdl_cfg CFG[] = {
   /*  Page-header shapes and the remaining supported axes.  */
   { 3, 0, 0,  2, 0, 0 },  { 5, 1, 2,  8, 0, 1 },
@@ -195,7 +191,6 @@ static const mdl_cfg CFG[] = {
 static u32 vals[NVAL];
 static int nval;
 
-/*  Cover every length and sign, boundary magnitudes, and changing histories.  */
 static void gen(const mdl_cfg * c) {
   u32 top = 1UL << c->depth, mask, i, s = 12345;
   nval = 0;
@@ -215,7 +210,6 @@ static void gen(const mdl_cfg * c) {
   }
 }
 
-/*  Integrate drive values for first-order and second-order predictors.  */
 typedef struct { u32 a, b; } accum;
 
 static u32 drive(const mdl_cfg * c, u32 v, accum * s) {
@@ -238,8 +232,7 @@ static void t_model(void) {
     mdl_init(&me, CFG + k);  mdl_init(&md, CFG + k);
     rc_enc_init(&e);  s.a = s.b = 0;
     for (i = 0; i < nval; i++) {
-      /*  Halfway through, a chain-link boundary: histories and predictor go,
-          probabilities stay.  */
+      /*  A link boundary resets history, not probabilities.  */
       if (i == nval / 2) { mdl_reset(&me);  s.a = s.b = 0; }
       mdl_enc(&me, &e, drive(CFG + k, vals[i], &s));
     }
@@ -259,6 +252,56 @@ static void t_model(void) {
   }
 }
 
+/*  Both kernels must produce the same archive and model state.  */
+#if defined(HAVE_SSE2)
+static void t_kernels(void) {
+  cm a, b;
+  rc_enc ea, eb;
+  xt_rng r;
+  u16 pa[64], pb[64];
+  u8 ca[64], cb[64];
+  sz la, lb;
+  int i, same = 1;
+  xt_section_begin("mixer kernels");
+  if (!blr_cpu_sse2()) {
+    xt_trace("SSE2 unavailable; skipping kernel comparison");
+    return;
+  }
+  memset(&a, 0, sizeof a);  memset(&b, 0, sizeof b);
+  cm_new(&a, 3, 12, 8, 7, 255);  cm_new(&b, 3, 12, 8, 7, 255);
+  rc_enc_init(&ea);  rc_enc_init(&eb);
+  cm_bind(&a, &ea, NULL);  cm_bind(&b, &eb, NULL);
+  rc_probs_init(pa, 64);  rc_probs_init(pb, 64);
+  memset(ca, 0, sizeof ca);  memset(cb, 0, sizeof cb);
+  xt_seed(&r, 3);
+  for (i = 0; i < 200000; i++) {
+    int st = (int) xt_next(&r, 3), sel = (int) xt_next(&r, 8);
+    u32 h = xt_next(&r, 3000);
+    int k = (int) xt_next(&r, 64), exp = (int) xt_next(&r, 3) - 1;
+    int bit = (int) ((xt_next(&r, 100) < 80) ^ (h & 1));
+    i32 v = (i32) xt_next(&r, 40) - 20;
+    cm_match_push(&a, v);  cm_match_push(&b, v);
+    cm_bit_scalar(&a, st, sel, h, pa + k, ca + k, exp, bit);
+    cm_bit_sse2(&b, st, sel, h, pb + k, cb + k, exp, bit);
+  }
+  la = rc_enc_finish(&ea);  lb = rc_enc_finish(&eb);
+  CHECK(la == lb && !memcmp(rc_enc_data(&ea), rc_enc_data(&eb), la),
+        "kernel output differs (%lu, %lu bytes)",
+        (unsigned long) la, (unsigned long) lb);
+  for (i = 0; i < 3; i++) {
+    if (memcmp(a.st[i].w, b.st[i].w, 8 * CM_NI * sizeof(short))) same = 0;
+    if (memcmp(a.st[i].sm, b.st[i].sm, 256 * sizeof(u32))) same = 0;
+    if (memcmp(a.st[i].hist, b.st[i].hist, (sz) 1 << 12)) same = 0;
+  }
+  CHECK(same, "kernel state differs");
+  CHECK(!memcmp(pa, pb, sizeof pa) && !memcmp(ca, cb, sizeof ca),
+        "kernel probabilities differ");
+  xt_trace("kernels agree over 200000 bits, %lu coded bytes", (unsigned long) la);
+  rc_enc_free(&ea);  rc_enc_free(&eb);
+  cm_free(&a);  cm_free(&b);
+}
+#endif
+
 void xt_run_unit(void) {
   xt_seed(&rng, 20260810UL);
   t_ilog();
@@ -269,4 +312,7 @@ void xt_run_unit(void) {
   t_varint();
   t_container();
   t_model();
+#if defined(HAVE_SSE2)
+  t_kernels();
+#endif
 }
