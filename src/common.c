@@ -74,7 +74,7 @@ void blr_fatal_unless(int cond, const char * fmt, ...) {
 #endif
 
 /*  Also detect a linked ASan runtime in mixed-instrumentation builds.  */
-#if defined(__GNUC__) && !defined(BLR_NO_ATTRS)
+#if defined(__GNUC__) && defined(__ELF__) && !defined(BLR_NO_ATTRS)
 extern void __asan_init(void) __attribute__((weak));
 #define BLR_SAN_LIVE (__asan_init != 0)
 #else
