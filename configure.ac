@@ -105,7 +105,10 @@ case "$blr_win_target" in
     AC_DEFINE([BLR_WIN_LEGACY], [1],
               [Define for the Windows 95 API and loader baseline])
     blr_win_cflags="-march=i486 -mtune=i486 -mfpmath=387"
-    blr_win_cflags="$blr_win_cflags -ffunction-sections -fdata-sections"
+    dnl  GCC's PE backend has no per-object .bss sections: under
+    dnl  -fdata-sections every zero-initialised array becomes a .data$name
+    dnl  section with contents, and the image carries megabytes of zeros.
+    blr_win_cflags="$blr_win_cflags -ffunction-sections"
     blr_win_ldflags="-Wl,--major-subsystem-version=4"
     blr_win_ldflags="$blr_win_ldflags,--minor-subsystem-version=0"
     blr_win_ldflags="$blr_win_ldflags,--major-os-version=4"
