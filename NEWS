@@ -1,0 +1,10 @@
+Release notes for balrogg. See ChangeLog for source-level changes.
+
+v1.0 (03-09-2026)
+- First release.
+- Lossless Ogg Vorbis recompression with adaptive context models and CM for
+  residue data. Levels -5 and above store per-file parameters
+  without increasing decode time.
+- Lossless Ogg Opus recompression using a parser derived from libopus. Each
+  entropy-coded symbol uses its original probability table as a prior.
+- Whole-bitstream and header-page deduplication for chained Vorbis files.

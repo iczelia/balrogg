@@ -1,0 +1,12 @@
+Lead development
+Kamila Szewczyk <k@iczelia.net>
+
+Acknowledgements
+- Xiph.Org Foundation, Skype Limited and the Opus contributors for libopus.
+  The parser in src/opus uses the 3-clause BSD license in src/opus/COPYING.
+
+License
+GNU General Public License version 3.
+
+The bundled yarg command-line parser is by Kamila Szewczyk and uses the
+Zero-Clause BSD license.
