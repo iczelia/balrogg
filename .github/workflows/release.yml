@@ -31,7 +31,7 @@ jobs:
       - name: Install the archivers
         run: |
           sudo apt-get update
-          sudo apt-get install -y bzip3 xz-utils zstd zip
+          sudo apt-get install -y bzip3 xz-utils zip
           bzip3 --version
           xz --version
 
@@ -53,7 +53,6 @@ jobs:
           make VERSION="$BLR_VERSION" dist-zip
           gzip -dk "balrogg-$BLR_VERSION.tar.gz"
           bzip3 -k "balrogg-$BLR_VERSION.tar"
-          zstd -19 -k "balrogg-$BLR_VERSION.tar"
           ls -l "balrogg-$BLR_VERSION".*
 
       - name: Upload the source package artifact
@@ -63,11 +62,9 @@ jobs:
           if-no-files-found: error
           path: |
             balrogg-${{ env.BLR_VERSION }}.tar
-            balrogg-${{ env.BLR_VERSION }}.tar.bz2
             balrogg-${{ env.BLR_VERSION }}.tar.bz3
             balrogg-${{ env.BLR_VERSION }}.tar.gz
             balrogg-${{ env.BLR_VERSION }}.tar.xz
-            balrogg-${{ env.BLR_VERSION }}.tar.zst
             balrogg-${{ env.BLR_VERSION }}.zip
 
   #  Statically linked Windows binaries.
@@ -578,8 +575,8 @@ jobs:
           ( cd debug && zip -9 -r \
               "../release/balrogg-$BLR_VERSION-debug-symbols.zip" . )
 
-          #  7 source packages, 12 binaries, and the debug bundle.
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 20
+          #  5 source packages, 12 binaries, and the debug bundle.
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 18
           ls -l release
 
       - name: Upload the complete release artifact
