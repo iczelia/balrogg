@@ -1,0 +1,29 @@
+2026-09-03  Kamila Szewczyk  <k@iczelia.net>
+
+	update the release procedure
+
+	disable a weak-symbol probe on Mach-O.
+
+	style, SSE2 kernels, old windows CRT from xpar, etc
+
+	check in some supporting code from xpar, etc.
+
+	check in the fuzzing harness and the unit tests
+
+	check in regression test data
+
+	GH workflows for build/release
+
+	check in miscellaneous build tooling and the manual page
+
+	source code check-in
+
+	vendor yarg, m4 autoconf-archive macros.
+
+	src/opus/*: vendor the (stripped down) Opus parser
+
+	check in test data
+
+	check in miscellaneous initial files
+
+	Initial Commit
