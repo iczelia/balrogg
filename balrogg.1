@@ -1,0 +1,144 @@
+.\"  Copyright (C) 2026 Kamila Szewczyk
+.\"
+.\"  This program is free software; you can redistribute it and/or modify
+.\"  it under the terms of the GNU General Public License as published by
+.\"  the Free Software Foundation, version 3.
+.\"
+.\"  This program is distributed in the hope that it will be useful,
+.\"  but WITHOUT ANY WARRANTY; without even the implied warranty of
+.\"  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+.\"  GNU General Public License for more details.
+.\"
+.\"  You should have received a copy of the GNU General Public License
+.\"  along with this program. If not, see <http://www.gnu.org/licenses/>.
+.TH BALROGG 1 "2026-09-03" "balrogg 1.0" "User Commands"
+.SH NAME
+balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
+.SH SYNOPSIS
+.B balrogg
+.RB [ \-1 .. \-9 ]
+.B e
+.I input output
+.br
+.B balrogg
+.B d
+.I input output
+.br
+.B balrogg
+.RB [ \-1 .. \-9 ]
+.RB [ \-j
+.IR N ]
+.B \-b
+.BR e | d
+.IR file ...
+.br
+.B balrogg
+.B dump
+.I archive
+.br
+.B balrogg
+.B pages
+.I oggfile
+.br
+.B balrogg
+.BR \-h | \-v
+.SH DESCRIPTION
+.B balrogg
+compresses Ogg Vorbis and Opus files losslessly. Expanding an archive restores
+the original bytes. Adaptive models recode entropy-coded fields and omit data
+that can be rebuilt, including checksums and lacing tables.
+.PP
+Both verbs detect the codec from the input.
+.B e
+uses the first Ogg page and
+.B d
+uses the archive header.
+.SH VERBS
+.TP
+.B e
+Compress
+.I input
+to
+.IR output .
+Files that cannot be reproduced exactly are refused.
+.TP
+.B d
+Expand the archive
+.I input
+to
+.IR output .
+.TP
+.B dump
+Print an archive's header, tune and stream lengths.
+.TP
+.B pages
+Print every page of an Ogg file and whether it can be reframed.
+.SH OPTIONS
+.TP
+.BR \-1 " .. " \-9
+Effort.
+.B \-9
+is the default. Through
+.B \-4
+each level adds a residue-model stage and affects decoding. Above
+.B \-4
+only the encoder's parameter search grows. The archive stores those parameters,
+so decoding runs at one speed from
+.B \-4
+.IR onward .
+.TP
+.BR \-b ", " \-\-batch
+Every remaining argument is an input. Encoding writes
+.IR file .blr
+beside each input and decoding strips the suffix, or appends
+.B .out
+when there is none. Files run in separate processes, limited by available cores
+and memory. Larger inputs start first. Other files continue after a refusal
+where supported.
+.TP
+.BR \-j ", " \-\-jobs = \fIN\fR
+Run
+.I N
+files at once instead of measuring the machine.
+.TP
+.BR \-h ", " \-\-help
+Print usage and exit.
+.TP
+.BR \-v ", " \-\-version
+Print the version, build host, and source libopus release.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.TP
+.B 1
+Malformed, unsupported, or unrecognized input. In batch mode, at least one
+file was refused and no higher status occurred.
+.TP
+.B 2
+Usage error.
+.TP
+.B 3
+A file could not be opened, read or written.
+.TP
+.B 4
+Internal error.
+.SH ENVIRONMENT
+.TP
+.B BLR_MEMCAP
+Per-process memory cap in MiB. The default is 2048. A value of 0 disables it.
+Sanitizer builds omit the cap.
+.SH LIMITS
+Opus mode supports one mono or stereo logical stream with channel mapping
+family 0. Vorbis floor type 0 and codebook lookup type 2 are unsupported.
+Pages with bad checksums and files without a final end-of-stream page are also
+refused.
+.SH EXAMPLES
+.nf
+balrogg e track.ogg track.blr
+balrogg d track.blr track.ogg
+balrogg -5 -b e album/*.ogg
+balrogg -b d album/*.blr
+.fi
+.SH AUTHOR
+Kamila Szewczyk <k@iczelia.net>
