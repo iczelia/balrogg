@@ -40,11 +40,10 @@ static u32 pagesamples(const pinfo * q, u32 b0, u32 b1) {
   int i;
   sz at = 0;
   u32 s = 0;
-  for (i = 0; i < q->p.np; i++) {
+  Fi(q->p.np,
     u8 f = q->p.plen[i] ? q->body[at] : 1;
     at += q->p.plen[i];
-    if (!(f & 1)) s += (((f >> 1) & 1) ? b1 : b0) / 2;
-  }
+    if (!(f & 1)) s += (((f >> 1) & 1) ? b1 : b0) / 2);
   return s;
 }
 
@@ -72,10 +71,9 @@ static int parse(const char * path, parsed * f) {
     at += got;  n++;
   }
   f->n = n;
-  for (i = 0; i < n; i++) {
+  Fi(n,
     if ((f->pg[i].p.type & 2) && eos) { f->pg[i].first = 1;  eos = 0; }
-    if (f->pg[i].p.type & 4) eos = 1;
-  }
+    if (f->pg[i].p.type & 4) eos = 1);
   if (!n || !f->pg[0].first) { CHECK(0, "%s: does not start a bitstream", path);  return 0; }
 
   for (i = 0; i < n; i = j) {
@@ -102,7 +100,7 @@ static int parse(const char * path, parsed * f) {
       if (dup >= 0 && m != i && isheader(f->pg + m)) f->pg[m].skip = 1;
     }
   }
-  for (i = 0; i < nkey; i++) free(key[i]);
+  Fi(nkey, free(key[i]));
   return 1;
 }
 
@@ -142,11 +140,10 @@ static void t_pages(const char * path, parsed * f) {
   int i, bad = 0, nc = 0;
 
   ogg_hdr_init(&h);  rc_enc_init(&e);
-  for (i = 0; i < f->n; i++) {
+  Fi(f->n,
     if (f->pg[i].first) ogg_hdr_reset(&h);
     if (!f->pg[i].skip) { ogg_hdr_enc(&h, &e, &f->pg[i].p, f->pg[i].first);  nc++; }
-    ogg_hdr_step(&h, f->pg[i].samples);
-  }
+    ogg_hdr_step(&h, f->pg[i].samples));
   olen = rc_enc_finish(&e);
 
   ogg_hdr_free(&h);  ogg_hdr_init(&h);
@@ -177,19 +174,17 @@ static void t_setup(const char * path, parsed * f) {
   int i, j, w = 0, bad = 0, np = 0;
 
   vb_init(&v);  vb_level(&v, CM_NLEV - 1);  rc_enc_init(&e);
-  for (i = 0; i < f->n; i++) {
+  Fi(f->n,
     sz atp = 0;
     if (f->pg[i].first) { vb_link(&v);  w = 0; }
     if (!isheader(f->pg + i)) continue;
     if (f->pg[i].p.tail) { CHECK(0, "%s: a header packet spans two pages", path);  break; }
-    for (j = 0; j < f->pg[i].p.np; j++) {
+    Fj(f->pg[i].p.np,
       if (!f->pg[i].skip) {
         if (w >= 3) { CHECK(0, "%s: a link has over three header packets", path);  break; }
         vb_hdr_enc(&v, &e, w, f->pg[i].body + atp, f->pg[i].p.plen[j]);  np++;
       }
-      atp += f->pg[i].p.plen[j];  w++;
-    }
-  }
+      atp += f->pg[i].p.plen[j];  w++));
   olen = rc_enc_finish(&e);
 
   vb_free(&v);  vb_init(&v);  vb_level(&v, CM_NLEV - 1);
@@ -221,13 +216,13 @@ static void t_audio(const char * path, parsed * f) {
   ogg_page q;
   rc_enc eb, em, et;
   rc_dec db, dm, dt;
-  sz blen, mlen, tlen, nb, at, got;
+  sz blen, mlen, tlen, nb, k, got;
   u8 * img;
   int i, j, w = 0, bad = 0, na = 0;
 
   vb_init(&v);  vb_level(&v, CM_NLEV - 1);  ogg_hdr_init(&h);
   rc_enc_init(&eb);  rc_enc_init(&em);  rc_enc_init(&et);
-  for (i = 0; i < f->n; i++) {
+  Fi(f->n,
     sz atp = 0;
     if (f->pg[i].first) {
       vb_link(&v);  ogg_hdr_reset(&h);  w = 0;
@@ -235,7 +230,7 @@ static void t_audio(const char * path, parsed * f) {
     }
     if (!f->pg[i].skip) ogg_hdr_enc(&h, &em, &f->pg[i].p, f->pg[i].first);
     ogg_hdr_step(&h, f->pg[i].samples);
-    for (j = 0; j < f->pg[i].p.np; j++) {
+    Fj(f->pg[i].p.np,
       const u8 * pk = f->pg[i].body + atp;
       sz pl = f->pg[i].p.plen[j];
       atp += pl;
@@ -243,9 +238,7 @@ static void t_audio(const char * path, parsed * f) {
       if (pk[0] & 1) {
         if (!f->pg[i].skip && w < 3) vb_hdr_enc(&v, &eb, w, pk, pl);
         w++;
-      } else { vb_aud_enc(&v, &eb, &em, &et, pk, pl, f->pg[i].p.type & 1);  na++; }
-    }
-  }
+      } else { vb_aud_enc(&v, &eb, &em, &et, pk, pl, f->pg[i].p.type & 1);  na++; }));
   blen = rc_enc_finish(&eb);  mlen = rc_enc_finish(&em);  tlen = rc_enc_finish(&et);
 
   vb_free(&v);  vb_init(&v);  vb_level(&v, CM_NLEV - 1);
@@ -279,9 +272,9 @@ static void t_audio(const char * path, parsed * f) {
       memset(img, 0, pl);
       nb = vb_aud_dec(&v, &db, &dm, &dt, img, pl, f->pg[i].p.type & 1);
       /*  Compare all consumed bits before writer padding.  */
-      for (at = 0; at < nb; at++)
-        if (((img[at >> 3] >> (at & 7)) & 1) != ((pk[at >> 3] >> (at & 7)) & 1))
-          { bad = i + 1;  break; }
+      Fk(nb,
+        if (((img[k >> 3] >> (k & 7)) & 1) != ((pk[k >> 3] >> (k & 7)) & 1))
+          { bad = i + 1;  break; });
     }
   }
   CHECK(!bad, "%s: page %d rebuilt wrong", xt_basename(path), bad - 1);

@@ -16,10 +16,10 @@ int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
   n = fz_split(data, size, pk, FZ_MAXPKT);
   if (n < 3) return 0;
   ob.b = NULL;  ob.n = ob.cap = 0;
-  for (i = 0; i < n; i++)
+  Fi(n,
     fz_page(&ob, pk[i].p, pk[i].n,
             i == 0 ? 2 : i == n - 1 ? 4 : 0, 0xB1A0C0DEu, (u32) i,
-            (u32) (i * 1024));
+            (u32) (i * 1024)));
   if (!ob.n) { free(ob.b);  return 0; }
   fz_fixcrc(ob.b, ob.n);
   fz_paths();

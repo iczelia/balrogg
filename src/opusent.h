@@ -16,7 +16,6 @@
 #define BLR_OPUSENT_H
 
 /*  Interface between the driven Opus range decoder and model.  */
-
 #include "opus_types.h"
 
 #define OREC_OFF      0

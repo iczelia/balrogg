@@ -52,11 +52,10 @@ static void t_short_init(void) {
   rc_dec d;
   sz i;
   xt_section_begin("rc short init");
-  Fi(5, {
+  Fi(5,
     rc_dec_init(&d, b, i);
     CHECK(d.code == want[i] && d.range == 0xFFFFFFFFUL && d.pos == i,
-          "rc_dec_init on a %lu-byte stream", (unsigned long) i);
-  });
+          "rc_dec_init on a %lu-byte stream", (unsigned long) i));
 }
 
 static int roundtrip(sz nslots, sz n, int mode) {
@@ -67,12 +66,11 @@ static int roundtrip(sz nslots, sz n, int mode) {
   int ok = 1;
   rc_probs_init(pe, nslots);  rc_probs_init(pd, nslots);
   rc_enc_init(&e);
-  Fi(n, {
+  Fi(n,
     slot[i] = (u8) xt_next(&rng, (u32) nslots);
     bit[i] = (u8) (mode == 0 ? xt_next(&rng, 2) : mode == 1 ? 0 : mode == 2 ? 1
                              : (xt_next(&rng, 100) < 97));
-    rc_enc_bit(&e, pe + slot[i], bit[i]);
-  });
+    rc_enc_bit(&e, pe + slot[i], bit[i]));
   len = rc_enc_finish(&e);
   rc_dec_init(&d, rc_enc_data(&e), len);
   Fi(n, if (rc_dec_bit(&d, pd + slot[i]) != bit[i]) { ok = 0;  break; });
@@ -105,11 +103,10 @@ static void t_coder_ad(void) {
   rc_probs_init(pe, NS);  rc_probs_init(pd, NS);
   memset(ce, 0, sizeof ce);  memset(cd, 0, sizeof cd);
   rc_enc_init(&e);
-  Fi(N, {
+  Fi(N,
     slot[i] = (u8) xt_next(&rng, NS);
     bit[i] = (u8) (slot[i] < 4 ? 1 : slot[i] < 8 ? 0 : xt_next(&rng, 2));
-    rc_enc_bit_ad(&e, pe + slot[i], ce + slot[i], RC_ALIM, bit[i]);
-  });
+    rc_enc_bit_ad(&e, pe + slot[i], ce + slot[i], RC_ALIM, bit[i]));
   len = rc_enc_finish(&e);
   rc_dec_init(&d, rc_enc_data(&e), len);
   Fi(N, if (rc_dec_bit_ad(&d, pd + slot[i], cd + slot[i], RC_ALIM) != bit[i]) bad++);
@@ -129,16 +126,14 @@ static void t_varint(void) {
   sz i, pos, n;
   int bad = 0;
   xt_section_begin("varint");
-  Fi(sizeof edge / sizeof *edge, {
+  Fi(sizeof edge / sizeof *edge,
     n = arc_varint_put(b, edge[i]);  pos = 0;
     if (n != arc_varint_len(edge[i]) || arc_varint_get(b, n, &pos) != edge[i]
-        || pos != n) bad++;
-  });
-  Fi(200000, {
+        || pos != n) bad++);
+  Fi(200000,
     u32 v = xt_next(&rng, 0x40000000UL);
     n = arc_varint_put(b, v);  pos = 0;
-    if (arc_varint_get(b, n, &pos) != v || pos != n) bad++;
-  });
+    if (arc_varint_get(b, n, &pos) != v || pos != n) bad++);
   CHECK(!bad, "%d values failed to round-trip", bad);
   CHECK(arc_varint_len(0) == 1 && arc_varint_len(0x3FFFFFFFUL) == 4,
         "varint widths");
@@ -221,7 +216,7 @@ static u32 drive(const mdl_cfg * c, u32 v, accum * s) {
 static void t_model(void) {
   int i, k;
   xt_section_begin("value coder");
-  for (k = 0; k < NCFG; k++) {
+  Fk(NCFG,
     model me, md;
     accum s;
     rc_enc e;
@@ -231,25 +226,22 @@ static void t_model(void) {
     gen(CFG + k);
     mdl_init(&me, CFG + k);  mdl_init(&md, CFG + k);
     rc_enc_init(&e);  s.a = s.b = 0;
-    for (i = 0; i < nval; i++) {
+    Fi(nval,
       /*  A link boundary resets history, not probabilities.  */
       if (i == nval / 2) { mdl_reset(&me);  s.a = s.b = 0; }
-      mdl_enc(&me, &e, drive(CFG + k, vals[i], &s));
-    }
+      mdl_enc(&me, &e, drive(CFG + k, vals[i], &s)));
     len = rc_enc_finish(&e);
     rc_dec_init(&d, rc_enc_data(&e), len);  s.a = s.b = 0;
-    for (i = 0; i < nval; i++) {
+    Fi(nval,
       if (i == nval / 2) { mdl_reset(&md);  s.a = s.b = 0; }
-      if (drive(CFG + k, vals[i], &s) != mdl_dec(&md, &d)) wrong++;
-    }
+      if (drive(CFG + k, vals[i], &s) != mdl_dec(&md, &d)) wrong++);
     CHECK(!wrong, "cfg %d (depth %d): %d values decoded wrong", k,
           CFG[k].depth, wrong);
     CHECK(me.n == md.n && !memcmp(me.p, md.p, me.n * sizeof *me.p)
           && !memcmp(me.cn, md.cn, me.n), "cfg %d: model memory diverged", k);
     xt_trace("cfg %-2d depth=%d %s -> %lu bytes", k, CFG[k].depth,
              CFG[k].sgn ? "signed" : "unsigned", (unsigned long) len);
-    rc_enc_free(&e);  mdl_free(&me);  mdl_free(&md);
-  }
+    rc_enc_free(&e);  mdl_free(&me);  mdl_free(&md));
 }
 
 /*  Both kernels must produce the same archive and model state.  */
@@ -274,7 +266,7 @@ static void t_kernels(void) {
   rc_probs_init(pa, 64);  rc_probs_init(pb, 64);
   memset(ca, 0, sizeof ca);  memset(cb, 0, sizeof cb);
   xt_seed(&r, 3);
-  for (i = 0; i < 200000; i++) {
+  Fi(200000,
     int st = (int) xt_next(&r, 3), sel = (int) xt_next(&r, 8);
     u32 h = xt_next(&r, 3000);
     int k = (int) xt_next(&r, 64), exp = (int) xt_next(&r, 3) - 1;
@@ -282,17 +274,15 @@ static void t_kernels(void) {
     i32 v = (i32) xt_next(&r, 40) - 20;
     cm_match_push(&a, v);  cm_match_push(&b, v);
     cm_bit_scalar(&a, st, sel, h, pa + k, ca + k, exp, bit);
-    cm_bit_sse2(&b, st, sel, h, pb + k, cb + k, exp, bit);
-  }
+    cm_bit_sse2(&b, st, sel, h, pb + k, cb + k, exp, bit));
   la = rc_enc_finish(&ea);  lb = rc_enc_finish(&eb);
   CHECK(la == lb && !memcmp(rc_enc_data(&ea), rc_enc_data(&eb), la),
         "kernel output differs (%lu, %lu bytes)",
         (unsigned long) la, (unsigned long) lb);
-  for (i = 0; i < 3; i++) {
+  Fi(3,
     if (memcmp(a.st[i].w, b.st[i].w, 8 * CM_NI * sizeof(short))) same = 0;
     if (memcmp(a.st[i].sm, b.st[i].sm, 256 * sizeof(u32))) same = 0;
-    if (memcmp(a.st[i].hist, b.st[i].hist, (sz) 1 << 12)) same = 0;
-  }
+    if (memcmp(a.st[i].hist, b.st[i].hist, (sz) 1 << 12)) same = 0);
   CHECK(same, "kernel state differs");
   CHECK(!memcmp(pa, pb, sizeof pa) && !memcmp(ca, cb, sizeof ca),
         "kernel probabilities differ");

@@ -28,8 +28,7 @@ const char * opus_mode_version(void) { return OPUS_PARSER_VERSION; }
 /*  Adapt Opus probability tables as priors while preserving exact n-ary
     coding for uniform PVQ values.  */
 
-/*  Opus range coder with backward carry propagation and n-ary coding.  */
-
+/*  Opus range coder and n-ary model.  */
 typedef struct {
   u8 * buf;
   sz cap, n;
@@ -130,7 +129,7 @@ static u32 orc_get(orc_dec * d) { return d->pos < d->len ? d->buf[d->pos++] : 0;
 static void orc_dec_init(orc_dec * d, const u8 * buf, sz len) {
   int i;
   d->buf = buf;  d->len = len;  d->pos = 0;  d->code = 0;
-  for (i = 0; i < 4; i++) d->code = (d->code << 8) | orc_get(d);
+  Fi(4, d->code = (d->code << 8) | orc_get(d));
   d->range = 0xFFFFFFFFUL;
 }
 
@@ -169,7 +168,6 @@ static u32 orc_dec_raw(orc_dec * d, int nbits) {
   orc_dec_cum_upd(d, s, s + 1, 1UL << nbits);
   return s;
 }
-
 
 #define OM_ENC 1
 #define OM_DEC 2
@@ -228,8 +226,7 @@ static void p_uniform(u32 * v, u32 V) {
   } else p_cum(*v, *v + 1, V);
 }
 
-/*  Opus PDF priors scaled to `scale`, with a floor of 1.  */
-
+/*  Scale Opus priors to `scale`, with a minimum of 1.  */
 typedef struct {
   okey key;
   u16 * f;
@@ -239,7 +236,7 @@ typedef struct {
 
 #define PHB 16
 
-/*  64-bit odd multipliers, spelled in halves: C89 has no `ULL`.  */
+/*  64-bit odd multipliers.  */
 #define K64(hi, lo) (((okey) hi##UL << 32) | (okey) lo##UL)
 
 static prior pri[1UL << PHB];
@@ -260,18 +257,17 @@ static void pri_build(prior * p, okey key, const u32 * raw, int n, u32 ft, int s
   int i;
   p->key = key;  p->n = n;  p->tot = 0;
   p->f = xmalloc(sizeof(u16) * (sz) n);
-  Fi(n, {
+  Fi(n,
     u32 q = (u32) (((okey) raw[i] * (okey) scale + ft / 2) / ft);
     if (q < 1) q = 1;
     if (q > 60000) q = 60000;
-    p->f[i] = (u16) q;  p->tot += q;
-  });
+    p->f[i] = (u16) q;  p->tot += q);
 }
 
 /*  Contexts.
     Open addressing uses a full 64-bit context key.  */
 
-/*  Store prior and adapted counts together, with sums for 16-symbol blocks.  */
+/*  Store prior and adapted counts with 16-symbol sums.  */
 #define CB_SHIFT 4
 #define CB_NBLK(n) (((n) + (1 << CB_SHIFT) - 1) >> CB_SHIFT)
 
@@ -290,7 +286,7 @@ typedef struct {
 static mctx * ctxs;
 static unsigned chb;
 
-/*  Track occupied slots for growth and efficient teardown.  */
+/*  Track occupied slots.  */
 static u32 * live;
 static sz nlive, clive;
 
@@ -313,12 +309,11 @@ static void ctx_grow(void) {
   sz k;
   chb++;
   ctxs = xcalloc((sz) 1 << chb, sizeof *ctxs);
-  for (k = 0; k < nlive; k++) {
+  Fk(nlive,
     mctx e = old[live[k]];
     unsigned i = ctx_slot(e.key, e.pr);
     while (ctxs[i].t) i = (i + 1) & ((1U << chb) - 1);
-    ctxs[i] = e;  live[k] = (u32) i;
-  }
+    ctxs[i] = e;  live[k] = (u32) i);
   free(old);
 }
 
@@ -330,7 +325,7 @@ static mctx * ctx_find(okey key, const prior * pr) {
     if (!ctxs[i].t) {
       int n = pr->n, k, nb = CB_NBLK(n);
       u32 * t = xcalloc((sz) nb + (sz) n, sizeof *t), * f = t + nb;
-      for (k = 0; k < n; k++) { f[k] = pr->f[k];  t[k >> CB_SHIFT] += f[k]; }
+      Fk(n, f[k] = pr->f[k];  t[k >> CB_SHIFT] += f[k]);
       ctxs[i].key = key;  ctxs[i].pr = pr;  ctxs[i].n = n;
       ctxs[i].t = t;  ctxs[i].tot = 0;
       if (nlive == clive) {
@@ -345,8 +340,8 @@ static mctx * ctx_find(okey key, const prior * pr) {
   }
 }
 
-/*  One symbol against prior + counts.  `inc` and `cap` are the learning rate
-    and the halving point; both are per kind and were swept.  */
+/*  Code one symbol against prior + counts.  `inc` and `cap` are the learning rate
+    and the halving point, chosen per symbol kind in KP below.  */
 static HOT void ctx_code(mctx * c, int inc, int cap, int * v) {
   int n = c->n, i, nb = CB_NBLK(n);
   u32 * blk = c->t, * f = blk + nb;
@@ -380,20 +375,19 @@ static HOT void ctx_code(mctx * c, int inc, int cap, int * v) {
   f[*v] += (u32) inc;  blk[*v >> CB_SHIFT] += (u32) inc;
   c->tot += (u32) inc;
   if (c->tot > (u32) cap) {
-    /*  Halve the adapted counts, not the prior underneath them.  */
+    /*  Halve adapted counts but retain the prior.  */
     const u16 * pf = c->pr->f;
     u32 s = 0;
     Fi(nb, blk[i] = 0);
-    Fi(n, {
+    Fi(n,
       u32 cn = (f[i] - pf[i]) >> 1;
-      f[i] = pf[i] + cn;  blk[i >> CB_SHIFT] += f[i];  s += cn;
-    });
+      f[i] = pf[i] + cn;  blk[i >> CB_SHIFT] += f[i];  s += cn);
     c->tot = s;
   }
 }
 
-/*  Per-kind parameters.
-    Parameters were selected by corpus sweeps with `opusrec cost`.  */
+/*  Per-kind parameters: the prior scale, learning rate, halving point,
+    and context bits of each symbol kind.  */
 
 typedef struct { int scale, inc, cap; } kparm;
 
@@ -439,7 +433,8 @@ static u16 * bin_slot(okey key, u16 init) {
 
 static int prev_qi[NB][2];       /*  previous frame's coarse qi, per band  */
 static int band_qi[2];           /*  previous band's qi, this frame  */
-static int prev_theta[NB];       /*  0..7, normalised by that op's qn  */
+static int prev_theta[NB];       /*  the previous frame's band angle, rescaled to 0..7
+                                     by the angle alphabet size qn  */
 static int prev_fine[NB][2];
 /*  Channel 1 uses channel 0 of the same band and frame as context.  */
 static int c0_qi, c0_qib = -1;
@@ -456,12 +451,12 @@ static void om_reset(void) {
   memset(site_hist, 0, sizeof site_hist);
 }
 
-static u32 * pvq_ut;            /*  the split's U table (see below)  */
+static u32 * pvq_ut;            /*  the codeword-count table U(n, k), from pvq_ubuild  */
 static void pvq_ubuild(void);
 
 static void om_init(void) {
   sz i;
-  Fi(1UL << PHB, { free(pri[i].f);  pri[i].f = NULL; });
+  Fi(1UL << PHB, free(pri[i].f);  pri[i].f = NULL);
   memset(pri, 0, sizeof pri);
   /*  Reset the context table after freeing its count vectors.  */
   Fi(nlive, free(ctxs[live[i]].t));
@@ -476,13 +471,13 @@ static void om_init(void) {
 static void om_free(void) {
   sz i;
 #ifdef BLR_PROFILE
-  /*  Show load factors because a full table would probe forever.  */
+  /*  Report table load.  */
   if (prof_on) { sz used = 0;  Fi(NBIN, used += binset[i] != 0);
     fprintf(stderr, "[prof] binp %lu/%lu used (%.3f%%), ctxs %lu/%lu live\n",
             (unsigned long) used, (unsigned long) NBIN, 100.0 * used / NBIN,
             (unsigned long) nlive, (unsigned long) ((sz) 1 << chb)); }
 #endif
-  Fi(1UL << PHB, { free(pri[i].f);  pri[i].f = NULL; });
+  Fi(1UL << PHB, free(pri[i].f);  pri[i].f = NULL);
   if (ctxs) { Fi(nlive, free(ctxs[live[i]].t));  free(ctxs);  ctxs = NULL; }
   chb = 0;
   free(live);  live = NULL;  nlive = clive = 0;
@@ -490,9 +485,8 @@ static void om_free(void) {
   oe_reset();   /*  including opusent.c's mirror scratch  */
 }
 
-/*  Identify inverse-CDF tables by content so IDs are stable across builds.
-    Hash the supplied tail through its terminating zero and cache by pointer.  */
-
+/*  Identify inverse-CDF tables by content.  Hash the supplied tail through
+    its terminating zero and cache by pointer.  */
 typedef struct { const void * ptr; u32 ftb; okey id; } tabent;
 static tabent tabs[1024];
 
@@ -521,8 +515,7 @@ static okey tab_id(const void * icdf, int wide, u32 ftb) {
   return tab_hash(icdf, wide, ftb);
 }
 
-/*  Prior constructors.
-    Constructors use the original libopus model values.  */
+/*  Prior constructors.  */
 
 /*  `key` is the table's identity from tab_id or tab_hash; `wide` selects
     the 16-bit table layout.  */
@@ -541,7 +534,7 @@ static prior * prior_icdf(okey key, const void * icdf, int wide, u32 ftb) {
   return p;
 }
 
-/*  Return the complete frequency vector corresponding to ec_laplace_encode.  */
+/*  Build the frequency vector for ec_laplace_encode.  */
 static unsigned lap_freq(unsigned fs0, int decay, int val) {
   unsigned fl, fs;
   int v, s, i;
@@ -579,7 +572,7 @@ static prior * prior_laplace(u32 fs0, int decay) {
   if (!p->f) {
     u32 raw[LAPN], used = 0;
     sz i;
-    Fi(LAPN - 1, { raw[i] = lap_freq(fs0, decay, (int) i - LAPW);  used += raw[i]; });
+    Fi(LAPN - 1, raw[i] = lap_freq(fs0, decay, (int) i - LAPW);  used += raw[i]);
     raw[LAPN - 1] = (used < 32768) ? 32768 - used : 1;   /*  escape  */
     pri_build(p, key, raw, LAPN, 32768, KP[OP_LAPLACE].scale);
   }
@@ -639,16 +632,15 @@ static void om_int(okey key, int nsym, int scale, int inc, int cap, int * v) {
 static void om_uni(u32 * v, u32 V) { p_uniform(v, V); }
 
 
-/*  Recursively split PVQ indices using the celt/cwrs.c pulse-count prior.  */
-
+/*  Split PVQ indices with the CELT pulse-count prior.  */
 #define PVQ_UN   208
 #define PVQ_UK   208
 #define PVQ_UBAD 0xFFFFFFFFUL
 #define PVQ_LEVMAX 7             /*  three bits in the flags byte  */
-#define PVQ_LEVDEF 6             /*  measured: deeper splits buy nothing  */
+#define PVQ_LEVDEF 6             /*  deeper splits cost time without shrinking output  */
 
 static int pvq_lev = PVQ_LEVDEF;
-#define PVQ_SC   1024            /*  prior scale, swept  */
+#define PVQ_SC   1024            /*  the prior scale  */
 #define PVQ_INC  16
 #define PVQ_CAP  32768
 
@@ -679,7 +671,7 @@ static u32 pvq_V(int n, int k) {
 static void pvq_dec(int n, int k, u32 i, int * y) {
   u32 p, q;
   int s, k0, val, j;
-  if (k == 0) { for (j = 0; j < n; j++) y[j] = 0;  return; }
+  if (k == 0) { Fj(n, y[j] = 0);  return; }
   if (n == 1) { y[0] = i ? -k : k;  return; }
   while (n > 2) {
     if (k >= n) {
@@ -764,7 +756,7 @@ static void pvq_tree(int band, int N, int K, int dep, int * y) {
     if (om_mode == OM_DEC) pvq_dec(N, K, x, y);
     return;
   }
-  if (om_mode != OM_DEC) for (j = 0; j < N1; j++) k += y[j] < 0 ? -y[j] : y[j];
+  if (om_mode != OM_DEC) Fj(N1, k += y[j] < 0 ? -y[j] : y[j]);
   {
     prior * pr = prior_split(N1, N2, K);
     okey key = ((okey) 0x51000000UL << 32) | ((okey) dep << 12) | (okey) band;
@@ -773,9 +765,6 @@ static void pvq_tree(int band, int N, int K, int dep, int * y) {
   pvq_tree(band, N1, k, dep + 1, y);
   pvq_tree(band, N2, K - k, dep + 1, y + N1);
 }
-
-/*  Dispatcher.
-    Symbol kinds use corpus-selected contexts.  */
 
 static int clampb(int b) { return b < 0 ? 0 : (b >= NB ? NB - 1 : b); }
 
@@ -1001,7 +990,7 @@ static void byte_ctx(okey base, int slot, int prev, int * v) {
   om_int(base | ((okey) slot << 16) | (okey) (prev & 0xFF), 256, 192, 28, 16384, v);
 }
 
-/*  Store the differing range when reconstruction changes unread frame bytes.  */
+/*  Store bytes changed by reconstruction.  */
 void om_frame(u8 * buf, const u8 * mir, u32 n) {
   int diff = 0, prev = 0;
   u32 lo = 0, hi = 0, i, span = 0;
@@ -1029,7 +1018,7 @@ void om_frame(u8 * buf, const u8 * mir, u32 n) {
   }
 }
 
-/*  Code signed residuals with unsigned magnitude to avoid signed overflow.  */
+/*  Use unsigned magnitudes to avoid signed overflow.  */
 static void resid(okey base, opus_int64 * v) {
   int zero, sg, nbits = 0;
   opus_uint64 mag, m2;
@@ -1063,12 +1052,11 @@ static void oc_packet_hdr(oc_state * s, int * nhdr, u8 * hdr, int * len) {
   opus_int64 d;
   om_int(K_NHDR | (okey) (s->prev_nhdr & 15), 16, 192, 28, 16384, &v);
   *nhdr = v;  s->prev_nhdr = v;
-  for (i = 0; i < *nhdr; i++) {
+  Fi(*nhdr,
     int b = (om_mode == OM_DEC) ? 0 : hdr[i];
     byte_ctx(i ? K_HDR : K_TOC, i < 8 ? i : 8, i < 8 ? s->prev_hdr[i] : 0, &b);
     hdr[i] = (u8) b;
-    if (i < 8) s->prev_hdr[i] = (u8) b;
-  }
+    if (i < 8) s->prev_hdr[i] = (u8) b);
   d = (om_mode == OM_DEC) ? 0 : (opus_int64) *len - (opus_int64) s->prev_len;
   resid(K_LEN, &d);
   if (om_mode == OM_DEC) {
@@ -1082,11 +1070,10 @@ static void oc_packet_hdr(oc_state * s, int * nhdr, u8 * hdr, int * len) {
 
 static void oc_packet_trailer(int n, u8 * t) {
   int i;
-  for (i = 0; i < n; i++) {
+  Fi(n,
     int b = (om_mode == OM_DEC) ? 0 : t[i];
     byte_ctx(K_TRL, i < 8 ? i : 8, i ? t[i - 1] : 0, &b);
-    t[i] = (u8) b;
-  }
+    t[i] = (u8) b);
 }
 
 /*  Code OpusHead and OpusTags whole.  */
@@ -1094,11 +1081,10 @@ static void oc_blob(u8 * b, int * n) {
   int i, v = *n;
   om_int(K_RAW, 4096, 192, 28, 16384, &v);
   *n = v;
-  for (i = 0; i < *n; i++) {
+  Fi(*n,
     int x = (om_mode == OM_DEC) ? 0 : b[i];
     byte_ctx(K_RAW | 0x10000, 0, i ? b[i - 1] : 0, &x);
-    b[i] = (u8) x;
-  }
+    b[i] = (u8) x);
 }
 
 static void oc_u32(u32 * v) {
@@ -1138,7 +1124,6 @@ static void oc_page(oc_state * s, oc_pagehdr * p) {
 }
 
 /*  Ogg framing over lacing values and packet boundaries.  */
-
 #define OPUS_MAXPKT (48 * 1275 + 64)  /*  48 frames of the largest legal size  */
 
 typedef struct { u8 * p;  int len; } opkt;
@@ -1153,7 +1138,7 @@ typedef struct {
 
 static void st_free(ostream * s) {
   int i;
-  if (s->pk) for (i = 0; i < s->npk; i++) free(s->pk[i].p);
+  if (s->pk) Fi(s->npk, free(s->pk[i].p));
   free(s->pk);  free(s->pg);
   memset(s, 0, sizeof *s);
 }
@@ -1197,7 +1182,7 @@ static int parse_stream(const u8 * buf, sz len, ostream * s) {
     }
     s->serial = p.serial;
     s->npg++;
-    for (i = 0; i < p.nseg; i++) {
+    Fi(p.nseg,
       int sl = p.lace[i];
       if (acclen + sl > OPUS_MAXPKT) { fprintf(stderr, "balrogg: over-long Opus packet\n");  goto bad; }
       memcpy(acc + acclen, h + OGG_HDRMIN + p.nseg + boff, (sz) sl);
@@ -1215,8 +1200,7 @@ static int parse_stream(const u8 * buf, sz len, ostream * s) {
         memcpy(s->pk[s->npk].p, acc, (sz) acclen);
         s->pk[s->npk].len = acclen;
         s->npk++;  acclen = 0;
-      }
-    }
+      });
     off += got;
   }
   free(acc);
@@ -1246,22 +1230,21 @@ static u8 * rebuild(const ostream * s, sz * outlen) {
   sz cap = 1UL << 20, n = 0;
   u8 * o = xmalloc(cap);
   int pi = 0, po = 0, i;
-  for (i = 0; i < s->npg; i++) {
+  Fi(s->npg,
     u8 hdr[OGG_HDRMIN + OGG_MAXSEG];
     int ns = s->pg[i].nsegs, k, sp = pi, sq = po;
     sz bodylen = 0, bstart, w;
-    for (k = 0; k < ns; k++) {
+    Fk(ns,
       int rem;
       FATAL_UNLESS(sp < s->npk, "opus: page %d ran out of packets", i);
       rem = s->pk[sp].len - sq;
       if (rem >= 255) { hdr[OGG_HDRMIN + k] = 255;  sq += 255; }
       else { hdr[OGG_HDRMIN + k] = (u8) rem;  sq = 0;  sp++; }
-      bodylen += hdr[OGG_HDRMIN + k];
-    }
+      bodylen += hdr[OGG_HDRMIN + k]);
     memcpy(hdr, "OggS", 4);  hdr[4] = 0;  hdr[5] = (u8) s->pg[i].htype;
-    for (k = 0; k < 8; k++) hdr[6 + k] = (u8) ((s->pg[i].granule >> (8 * k)) & 0xFF);
-    for (k = 0; k < 4; k++) hdr[14 + k] = (u8) ((s->serial >> (8 * k)) & 0xFF);
-    for (k = 0; k < 4; k++) hdr[18 + k] = (u8) ((s->pg[i].seqno >> (8 * k)) & 0xFF);
+    Fk(8, hdr[6 + k] = (u8) ((s->pg[i].granule >> (8 * k)) & 0xFF));
+    Fk(4, hdr[14 + k] = (u8) ((s->serial >> (8 * k)) & 0xFF));
+    Fk(4, hdr[18 + k] = (u8) ((s->pg[i].seqno >> (8 * k)) & 0xFF));
     memset(hdr + 22, 0, 4);  hdr[26] = (u8) ns;
     FATAL_UNLESS(n <= SIZE_MAX - OGG_HDRMIN - (sz) ns
                  && bodylen <= SIZE_MAX - n - OGG_HDRMIN - (sz) ns,
@@ -1272,15 +1255,13 @@ static u8 * rebuild(const ostream * s, sz * outlen) {
     }
     memcpy(o + n, hdr, OGG_HDRMIN + (sz) ns);
     bstart = n + OGG_HDRMIN + (sz) ns;  w = bstart;
-    for (k = 0; k < ns; k++) {
+    Fk(ns,
       int sl = hdr[OGG_HDRMIN + k];
       memcpy(o + w, s->pk[pi].p + po, (sz) sl);
       w += sl;  po += sl;
-      if (sl < 255) { po = 0;  pi++; }
-    }
+      if (sl < 255) { po = 0;  pi++; });
     ogg_crc_set(o + n, OGG_HDRMIN + (sz) ns + bodylen);
-    n = bstart + bodylen;
-  }
+    n = bstart + bodylen);
   FATAL_UNLESS(pi == s->npk && po == 0,
                "opus: page layout leaves %d packets", s->npk - pi);
   *outlen = n;
@@ -1303,18 +1284,18 @@ int opus_pack(const char * in, const char * out, int lev) {
   e.buf = NULL;
   buf = slurp(in, &len);
   if (parse_stream(buf, len, &s)) goto done;
-  /*  opus_unpack refuses counts beyond these, so refuse them here too.  */
+  /*  Match the decoder's count limits.  */
   if (s.npk > (1L << 24) || s.npg > (1L << 24)) {
     fprintf(stderr, "balrogg: %s has %d packets on %d pages, limit %ld\n",
             in, s.npk, s.npg, 1L << 24);
     goto done;
   }
-  for (i = 0; i < 2; i++)
+  Fi(2,
     if (s.pk[i].len >= OC_BLOBMAX) {
       fprintf(stderr, "balrogg: %s header packet %d is %d bytes, limit %d\n",
               in, i, s.pk[i].len, OC_BLOBMAX - 1);
       goto done;
-    }
+    });
 
   orc_enc_init(&e);
   om_init();  om_mode = OM_ENC;  E = &e;  D = NULL;
@@ -1323,7 +1304,7 @@ int opus_pack(const char * in, const char * out, int lev) {
   u = (u32) s.npk;  oc_u32(&u);
   u = (u32) s.npg;  oc_u32(&u);
   u = s.serial;     oc_u32(&u);
-  for (i = 0; i < 2; i++) { int n = s.pk[i].len;  oc_blob(s.pk[i].p, &n); }
+  Fi(2, int n = s.pk[i].len;  oc_blob(s.pk[i].p, &n));
 
   dec = opus_decoder_create(s.channels);
   if (!dec) { fprintf(stderr, "balrogg: %s cannot create Opus decoder\n", in);  goto done; }
@@ -1340,7 +1321,7 @@ int opus_pack(const char * in, const char * out, int lev) {
               in, i, poff, OC_HDRMAX - 1);
       goto done;
     }
-    for (j = 0; j < nf; j++) sum += sizes[j];
+    Fj(nf, sum += sizes[j]);
     oc_packet_hdr(&cs, &poff, s.pk[i].p, &L);
     oc_packet_trailer(L - poff - sum, s.pk[i].p + poff + sum);
     oe_begin();  orec_mode = OREC_ANALYZE;
@@ -1349,12 +1330,11 @@ int opus_pack(const char * in, const char * out, int lev) {
     if (err < 0) { fprintf(stderr, "balrogg: %s packet %d decode failed (%d)\n", in, i, err);  goto done; }
   }
 
-  for (i = 0; i < s.npg; i++) {
+  Fi(s.npg,
     oc_pagehdr p;
     p.htype = s.pg[i].htype;  p.nsegs = s.pg[i].nsegs;
     p.seqno = s.pg[i].seqno;  p.granule = s.pg[i].granule;
-    oc_page(&cs, &p);
-  }
+    oc_page(&cs, &p));
 
   arc_init(&a, (u8) (0x09 | ARC_OPUS | (lev << 5)));
   arc_push(&a, e.buf, orc_enc_done(&e));
@@ -1412,12 +1392,11 @@ int opus_unpack(const char * in, const char * out) {
   s.pg = xmalloc((sz) s.npg * sizeof *s.pg);
   memset(s.pg, 0, (sz) s.npg * sizeof *s.pg);
 
-  for (i = 0; i < 2; i++) {
+  Fi(2,
     int n = 0;
     s.pk[i].p = xmalloc(OC_BLOBMAX);
     oc_blob(s.pk[i].p, &n);
-    s.pk[i].len = n;
-  }
+    s.pk[i].len = n);
   if (s.pk[0].len < 19 || memcmp(s.pk[0].p, "OpusHead", 8)) {
     fprintf(stderr, "balrogg: %s has no OpusHead\n", in);  goto done;
   }
@@ -1452,7 +1431,7 @@ int opus_unpack(const char * in, const char * out) {
               in, i, nf, poff, nhdr);
       goto done;
     }
-    for (j = 0; j < nf; j++) sum += sizes[j];
+    Fj(nf, sum += sizes[j]);
     oc_packet_trailer(L - nhdr - sum, s.pk[i].p + nhdr + sum);
     oe_begin();  orec_mode = OREC_SYNTH;
     err = opus_decode(dec, s.pk[i].p, L);
@@ -1462,13 +1441,12 @@ int opus_unpack(const char * in, const char * out) {
     }
   }
 
-  for (i = 0; i < s.npg; i++) {
+  Fi(s.npg,
     oc_pagehdr p;
     memset(&p, 0, sizeof p);
     oc_page(&cs, &p);
     s.pg[i].htype = p.htype;  s.pg[i].nsegs = p.nsegs;
-    s.pg[i].seqno = p.seqno;  s.pg[i].granule = p.granule;
-  }
+    s.pg[i].seqno = p.seqno;  s.pg[i].granule = p.granule);
 
   rb = rebuild(&s, &rlen);
   spew(out, rb, rlen);

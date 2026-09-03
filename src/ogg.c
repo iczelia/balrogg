@@ -14,18 +14,16 @@
 
 #include "ogg.h"
 
-
-/*  Ogg's CRC-32: 0x04C11DB7, unreflected, zero seed, no final inversion.  */
+/*  Ogg CRC-32, unreflected with zero seed and no final inversion.  */
 static u32 CRC[256];
 
 static void crcinit(void) {
   u32 i, j, c;
   if (CRC[1]) return;
-  Fi(256, {
+  Fi(256,
     c = i << 24;
     Fj(8, c = (c & 0x80000000UL) ? (c << 1) ^ 0x04C11DB7UL : c << 1);
-    CRC[i] = c;
-  });
+    CRC[i] = c);
 }
 
 static u32 crcrun(u32 c, const u8 * d, sz n) {
@@ -97,10 +95,9 @@ void ogg_unpack(ogg_page * p) {
   sz i;
   u32 run = 0;
   p->np = 0;  p->tail = 0;
-  Fi((sz) p->nseg, {
+  Fi((sz) p->nseg,
     run += p->lace[i];
-    if (p->lace[i] != OGG_MAXSEG) { p->plen[p->np++] = run;  run = 0; }
-  });
+    if (p->lace[i] != OGG_MAXSEG) { p->plen[p->np++] = run;  run = 0; });
   /*  A final 255 continues the packet on the next page.  */
   if (p->nseg && p->lace[p->nseg - 1] == OGG_MAXSEG) {
     p->plen[p->np++] = run;  p->tail = 1;
@@ -111,7 +108,7 @@ void ogg_pack(ogg_page * p) {
   int i;
   sz n = 0;
   p->blen = 0;
-  for (i = 0; i < p->np; i++) {
+  Fi(p->np,
     u32 v = p->plen[i];
     p->blen += v;
     while (v >= OGG_MAXSEG) {
@@ -121,15 +118,11 @@ void ogg_pack(ogg_page * p) {
     if (!(p->tail && i == p->np - 1)) {
       FATAL_UNLESS(n < OGG_MAXSEG, "page needs more than %d segments", OGG_MAXSEG);
       p->lace[n++] = (u8) v;
-    } else FATAL_UNLESS(!v, "continued packet has a partial segment");
-  }
+    } else FATAL_UNLESS(!v, "continued packet has a partial segment"));
   p->nseg = (int) n;
 }
 
-/*  Page-header model.
-
-    The seven configurations were selected by a corpus sweep.  */
-
+/*  Page-header model; one configuration per field, in FCFG.  */
 static const mdl_cfg FCFG[OGG_NFIELD] = {
   /*  depth  signed  shist  freeze  bank  order  */
   {   3,     0,      0,     2,      0,    0 },   /*  header type  */
@@ -172,7 +165,6 @@ void ogg_hdr_step(ogg_hdr * h, u32 samples) { h->cum += samples; }
 
 /*  Predict granules from prior packet sample counts. A first-order model then
     gives steady full pages a zero residual.  */
-
 void ogg_hdr_enc(ogg_hdr * h, rc_enc * e, const ogg_page * p, int first) {
   int i;
   mdl_enc(h->f + 0, e, (u32) (first ? p->type & ~2 : p->type));
@@ -181,7 +173,7 @@ void ogg_hdr_enc(ogg_hdr * h, rc_enc * e, const ogg_page * p, int first) {
   mdl_enc(h->f + 3, e, p->serial);
   mdl_enc(h->f + 4, e, p->seq);
   mdl_enc(h->f + 5, e, (u32) p->np);
-  for (i = 0; i < p->np; i++) mdl_enc(h->f + 6, e, p->plen[i]);
+  Fi(p->np, mdl_enc(h->f + 6, e, p->plen[i]));
   /*  Distinguish a closing zero from packet continuation.  */
   if (p->nseg && !p->lace[p->nseg - 1]) rc_enc_bit(e, &h->tl, 1);
   else if (p->nseg && p->lace[p->nseg - 1] == OGG_MAXSEG) rc_enc_bit(e, &h->tl, 0);
@@ -197,7 +189,7 @@ void ogg_hdr_dec(ogg_hdr * h, rc_dec * d, ogg_page * p, int first) {
   p->seq = mdl_dec(h->f + 4, d);
   p->np = (int) mdl_dec(h->f + 5, d);
   FATAL_UNLESS(p->np >= 0 && p->np <= OGG_MAXSEG, "page claims %d packets", p->np);
-  for (i = 0; i < p->np; i++) p->plen[i] = mdl_dec(h->f + 6, d);
+  Fi(p->np, p->plen[i] = mdl_dec(h->f + 6, d));
   p->tail = 0;
   if (p->np && !(p->plen[p->np - 1] % OGG_MAXSEG))
     p->tail = !rc_dec_bit(d, &h->tl);

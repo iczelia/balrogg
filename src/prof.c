@@ -70,19 +70,18 @@ void prof_open(const char * dir) {
   FATAL_UNLESS(strlen(dir) + 16 < sizeof path, "prof: directory name too long");
   if (blr_mkdir(dir) && errno != EEXIST)
     FATAL_CODE(BLR_EXIT_IO, "prof: cannot create %s", dir);
-  for (i = 0; i < S_N; i++) {
+  Fi(S_N,
     sprintf(path, "%s/%s", dir, FILEN[i]);
     dump[i] = fopen(path, "wb");
-    if (!dump[i]) FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path);
-  }
+    if (!dump[i]) FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path));
   sprintf(path, "%s/MANIFEST", dir);
   { FILE * f = fopen(path, "w");
     if (!f) FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path);
     if (fprintf(f, "balrogg stream dumps. Little-endian fixed-width records.\n\n") < 0)
       FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path);
-    for (i = 0; i < S_N; i++)
+    Fi(S_N,
       if (fprintf(f, "%-12s %s\n", FILEN[i], LAYOUT[i]) < 0)
-        FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path);
+        FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path));
     if (fclose(f)) FATAL_CODE(BLR_EXIT_IO, "prof: cannot write %s", path); }
   prof_on = 1;
 }
@@ -163,22 +162,21 @@ static int by_bits(const void * a, const void * b) {
 void prof_close(void) {
   int ord[P_N], i, bad = 0;
   double tot = 0;
-  for (i = 0; i < P_N; i++) { ord[i] = i;  tot += bits[i]; }
+  Fi(P_N, ord[i] = i;  tot += bits[i]);
   qsort(ord, P_N, sizeof *ord, by_bits);
   if (tot <= 0) tot = 1;
   printf("%-30s %14s %8s %12s %10s\n",
          "component", "bytes", "share", "symbols", "bits/sym");
-  for (i = 0; i < P_N; i++) {
+  Fi(P_N,
     int c = ord[i];
     if (bits[c] < 1) continue;
     printf("%-30s %14.0f %7.2f%% %12.0f %10.3f\n", NAME[c], bits[c] / 8,
-           100.0 * bits[c] / tot, syms[c], syms[c] ? bits[c] / syms[c] : 0.0);
-  }
+           100.0 * bits[c] / tot, syms[c], syms[c] ? bits[c] / syms[c] : 0.0));
   printf("%-30s %14.0f %7.2f%%\n", "TOTAL", tot / 8, 100.0);
-  for (i = 0; i < S_N; i++) if (dump[i]) {
+  Fi(S_N, if (dump[i]) {
     if (fclose(dump[i])) bad = 1;
     dump[i] = NULL;
-  }
+  });
   prof_on = 0;
   if (bad) FATAL_CODE(BLR_EXIT_IO, "prof: cannot finish dumps");
 }

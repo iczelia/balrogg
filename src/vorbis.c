@@ -17,10 +17,10 @@
 
 static void cm_alloc(vb_ctx * v);
 
-/*  Corpus-selected value models. An asterisk marks tied axes.  */
-
-/*  A plus marks depths raised to cover the field's full packet width. M_MULTW
-    handles multiplicands whose residual exceeds the usual field.  */
+/*  Value models.  An asterisk marks a field configured like its neighbour
+    rather than on its own.  A plus marks depths raised to cover the field's
+    full packet width. M_MULTW handles multiplicands whose residual exceeds
+    the usual field.  */
 
 static const mdl_cfg CFG[M_N] = {
   /*  depth  sgn shist freeze bank order        field  */
@@ -136,11 +136,10 @@ void vb_free(vb_ctx * v) {
   free(v->cmt);  v->cmt = NULL;
   free(v->cmtc);  v->cmtc = NULL;
   cm_free(&v->cm);
-  Fi(v->nsu, {
+  Fi(v->nsu,
     Fj(v->su[i]->nbk, bk_free(v->su[i]->bk + j));
     free(v->su[i]->bk);  free(v->su[i]->fl);  free(v->su[i]->rs);
-    free(v->su[i]->mp);  free(v->su[i]);
-  });
+    free(v->su[i]->mp);  free(v->su[i]));
   free(v->su);  v->su = NULL;  v->nsu = 0;  v->cur = NULL;
   Fi(VB_MAXSLOT, free(v->sl[i].len));
   memset(v->sl, 0, sizeof v->sl);  v->nsl = 0;
@@ -175,10 +174,10 @@ void vb_use(vb_ctx * v, u32 n) {
   v->csu = n;  v->cur = v->su[n];
 }
 
-/*  Link boundaries retain setup-model state but reset packet histories.  */
+/*  Link boundaries retain models but reset packet history.  */
 void vb_link(vb_ctx * v) {
   v->pm = v->pw[0] = v->pw[1] = 0;
-  /*  Reset payload histories and cross-pass memory, retaining probabilities.  */
+  /*  Retain probabilities while resetting payload history.  */
   v->hu = 0;  v->psl = 0;
   memset(v->fh, 0, 4);  memset(v->sh, 0, 4);  memset(v->mh, 0, 4);
   memset(v->fpl, 0, sizeof v->fpl);
@@ -199,7 +198,7 @@ void vb_reset(vb_ctx * v) {
   memset(v->awc, 0, sizeof v->awc);
   if (v->cmtc) memset(v->cmtc, 0, VB_CBANK * VB_CSIZE);
   if (v->ar) {
-    /*  Back to pristine, which for this arena means zero (see AR_LIVE).  */
+    /*  AR_LIVE treats zero as pristine.  */
     memset(v->ar, 0, (sz) v->aglob * sizeof *v->ar);
     memset(v->ai, 0, sizeof v->ai);
     memset(v->ac, 0, v->aglob);
@@ -267,7 +266,7 @@ static void bput(io * z, int n, u32 v) {
     z->b[z->pos >> 3] |= (u8) (((v >> i) & 1) << (z->pos & 7));
 }
 
-/*  The one-bit forms the codeword walks take, without the loop.  */
+/*  One-bit codeword steps.  */
 static INLINE u32 bget1(io * z) {
   u32 r;
   FATAL_IF_HOT(z->pos >= z->len * 8)("vorbis: packet ends inside a codeword");
@@ -300,12 +299,12 @@ static u32 tv(io * z, int st, u16 * s, u8 * c, int d, u32 v) {
   return idx - (1UL << d);
 }
 
-/*  Code an n-bit field through model block `k`, rejecting decoded overflow.  */
+/*  Code an n-bit field and reject overflow.  */
 static u32 fld(io * z, int k, int n, u32 p) {
   u32 v = z->enc ? bget(z, n) : 0;
   v = mv(z, S_BULK, k, v, p);
   if (!z->enc) {
-#ifndef BLR_NO_FLD                    /*  fuzz/noguard.sh takes it out  */
+#ifndef BLR_NO_FLD                    /*  fuzzing may define this to reach further  */
     FATAL_UNLESS(n >= 32 || !(v >> n),
                  "vorbis: field %d value %lu exceeds %d bits",
                  k, (unsigned long) v, n);
@@ -315,7 +314,7 @@ static u32 fld(io * z, int k, int n, u32 p) {
   return v;
 }
 
-/*  `n` packet bits carrying a value, coded through a tree of depth `d`.  */
+/*  Code `n` packet bits through a depth-`d` tree.  */
 static u32 tfld(io * z, int k, int d, int n) {
   u32 v = z->enc ? bget(z, n) : 0;
   v = tv(z, S_BULK, z->v->f + k, z->v->fc + k, d, v);
@@ -323,7 +322,7 @@ static u32 tfld(io * z, int k, int d, int n) {
   return v;
 }
 
-/*  `n` packet bits the format fixes: never coded, only checked.  */
+/*  Check `n` fixed packet bits.  */
 static void cst(io * z, int n, u32 k) {
   if (z->enc) {
     u32 v = bget(z, n);
@@ -332,15 +331,14 @@ static void cst(io * z, int n, u32 k) {
   } else bput(z, n, k);
 }
 
-/*  Largest v with (v + 1)^dim <= entries, computed without float rounding.  */
+/*  Largest v where (v + 1)^dim <= entries.  */
 static u32 lk1(u32 entries, u32 dim) {
   u32 v = 0, i, p;
   for (;;) {
     p = 1;
-    Fi(dim, {
+    Fi(dim,
       if (p > entries / (v + 1)) { p = entries + 1;  break; }
-      p *= v + 1;
-    });
+      p *= v + 1);
     if (p > entries) return v;
     v++;
   }
@@ -353,7 +351,7 @@ static u32 lk1(u32 entries, u32 dim) {
 static void bk_words(vb_book * b) {
   u32 mk[33], i, j, e, l;
   memset(mk, 0, sizeof mk);
-  Fi(b->ent, {
+  Fi(b->ent,
     l = b->len[i];
     if (!l) continue;
     e = mk[l];
@@ -366,8 +364,7 @@ static void bk_words(vb_book * b) {
     for (j = l + 1; j < 33; j++) {
       if ((mk[j] >> 1) != e) break;
       e = mk[j];  mk[j] = mk[j - 1] << 1;
-    }
-  });
+    });
 }
 
 /*  ... and the tree that reads them back.  A child of 0 is absent, a
@@ -380,7 +377,7 @@ static void bk_tree(vb_book * b) {
   cap = u + 2;
   b->nd = xmalloc(2 * cap * sizeof *b->nd);
   memset(b->nd, 0, 2 * cap * sizeof *b->nd);
-  Fi(b->ent, {
+  Fi(b->ent,
     if (!b->len[i]) continue;
     idx = 0;
     for (k = b->len[i]; k > 1; k--) {
@@ -393,8 +390,7 @@ static void bk_tree(vb_book * b) {
     }
     idx = 2 * idx + (b->code[i] & 1);
     FATAL_UNLESS(!b->nd[idx], "vorbis: codebook is not prefix free");
-    b->nd[idx] = -(i32) (i + 1);
-  });
+    b->nd[idx] = -(i32) (i + 1));
 }
 
 /*  A lookup-1 entry is a base-`nv` list of multiplicand indices. Code centered
@@ -406,12 +402,11 @@ static void bk_look(vb_book * b) {
   b->inv = xmalloc(b->base * sizeof *b->inv);
   Fi(b->base, b->inv[i] = (u32) -1);
   /*  Require unique multiplicands and enough digit tuples for every entry.  */
-  Fi(b->nv, {
+  Fi(b->nv,
     FATAL_UNLESS(b->inv[b->mult[i]] == (u32) -1,
                  "vorbis: duplicate codebook multiplicand %lu",
                  (unsigned long) b->mult[i]);
-    b->inv[b->mult[i]] = i;
-  });
+    b->inv[b->mult[i]] = i);
   /*  Count tuples, guarding the nv == 1 case.  */
   np = 1;
   if (b->nv > 1) Fi(b->dim, np *= b->nv);
@@ -437,7 +432,7 @@ static void pool_take(vb_ctx * v, u32 k, vb_book * b, const u8 * len) {
   s->ent = b->ent;  s->nv = b->nv;  s->dm = b->dm;  s->de = b->de;  s->ds = b->ds;
 }
 
-/*  Compare dense lengths directly and represent sparse holes as 0xFF.  */
+/*  Represent sparse holes as 0xFF.  */
 static u8 * pool_cmp(vb_book * b, u8 * buf) {
   u32 i, n = 0;
   Fi(b->ent, if (b->len[i]) n++);
@@ -450,13 +445,12 @@ static u32 pool_slot(vb_ctx * v, vb_book * b) {
   u32 i, k, best = 0, bd = 0xFFFFFFFFUL, d, sum = 0, nrm;
   u8 * len, * tmp = xmalloc(b->ent);
   len = pool_cmp(b, tmp);
-  Fi(v->nsl, {
+  Fi(v->nsl,
     if (v->sl[i].ent != b->ent || v->sl[i].nv != b->nv ||
         v->sl[i].dm != b->dm || v->sl[i].de != b->de || v->sl[i].ds != b->ds)
       continue;
     d = pool_dist(v->sl + i, len, b->ent);
-    if (d < bd) { bd = d;  best = i;  if (!d) break; }
-  });
+    if (d < bd) { bd = d;  best = i;  if (!d) break; });
   /*  Allow one length unit of average distance per used entry.  */
   /*  nu == 0 is legal (every length a hole) and would trap.  Two such books
       are interchangeable, so a zero distance still matches.  */
@@ -510,10 +504,9 @@ static void lengths(io * z, vb_book * k) {
     return;
   }
   used = (int) tfld(z, F_USE0, 1, 1);
-  Fi(ent, {
+  Fi(ent,
     if (i) { prev = used;  used = (int) tfld(z, prev ? F_USED : F_USEU, 1, 1); }
-    if (used) k->len[i] = (u8) (fld(z, M_LEN, 5, 0) + 1);
-  });
+    if (used) k->len[i] = (u8) (fld(z, M_LEN, 5, 0) + 1));
 }
 
 /*  Vorbis float32 has a sign, 10-bit exponent, and 21-bit mantissa. The two
@@ -539,26 +532,26 @@ static void f32(vb_book * b, u32 w) {
 
 static void codebooks(io * z) {
   vb_setup * s = z->v->cur;
-  u32 nb, b, lk, vb, i;
+  u32 nb, j, lk, vb, i;
   int mk;
   vb_book * k;
   nb = fld(z, M_NBOOK, 8, 0) + 1;
   s->bk = xmalloc(nb * sizeof *s->bk);  s->nbk = nb;
   memset(s->bk, 0, nb * sizeof *s->bk);
-  for (b = 0; b < nb; b++) {
-    k = s->bk + b;
+  Fj(nb,
+    k = s->bk + j;
     cst(z, 24, 0x564342);
     k->dim = fld(z, M_DIM, 16, 0);
     k->ent = fld(z, M_ENT, 24, 0);
     /*  ent == 0 is accepted by libvorbis; dim == 0 divides by zero.  */
     FATAL_UNLESS(k->dim > 0, "vorbis: codebook %lu has dimension 0",
-                 (unsigned long) b);
+                 (unsigned long) j);
     FATAL_UNLESS(k->ent <= (1UL << 20), "vorbis: codebook %lu has %lu entries",
-                 (unsigned long) b, (unsigned long) k->ent);
+                 (unsigned long) j, (unsigned long) k->ent);
     /*  Enforce libvorbis's joint dimension and entry bound.  */
     FATAL_UNLESS(blr_ilog(k->dim) + blr_ilog(k->ent) <= 24,
                  "vorbis: codebook %lu size %lu x %lu is unsupported",
-                 (unsigned long) b, (unsigned long) k->dim,
+                 (unsigned long) j, (unsigned long) k->dim,
                  (unsigned long) k->ent);
     k->len = xmalloc(k->ent);  memset(k->len, 0, k->ent);
     k->code = xmalloc(k->ent * sizeof *k->code);
@@ -581,22 +574,20 @@ static void codebooks(io * z) {
                                (i & 1) ? (k->nv >> 1) - (i + 1) / 2
                                        : (k->nv >> 1) + i / 2));
     FATAL_UNLESS(k->nv > 0, "vorbis: codebook %lu has an empty lookup table",
-                 (unsigned long) b);
+                 (unsigned long) j);
     bk_look(k);
-    k->slot = pool_slot(z->v, k);
-  }
+    k->slot = pool_slot(z->v, k));
 }
 
 
 /*  Sort Floor 1 posts by X.  */
 static void fl_sort(vb_floor * f) {
   u32 i, j, t;
-  Fi(f->posts, {
+  Fi(f->posts,
     f->srt[i] = (u8) i;
     for (j = i; j > 0 && f->x[f->srt[j - 1]] > f->x[f->srt[j]]; j--) {
       t = f->srt[j];  f->srt[j] = f->srt[j - 1];  f->srt[j - 1] = (u8) t;
-    }
-  });
+    });
   Fi(f->posts, if (i) FATAL_UNLESS(f->x[f->srt[i]] != f->x[f->srt[i - 1]],
                                    "vorbis: floor X list repeats a value"));
 }
@@ -605,63 +596,56 @@ static const u32 QUANT[4] = { 256, 128, 86, 64 };
 
 static void floors(io * z) {
   vb_setup * s = z->v->cur;
-  u32 nt, nf, f, i, j, nc, sub;
+  u32 nt, nf, k, i, j, nc, sub;
   vb_floor * q;
   nt = fld(z, M_NTIME, 6, 0) + 1;
   Fi(nt, cst(z, 16, 0));                      /*  the time domain list  */
   nf = fld(z, M_NFLOOR, 6, 0) + 1;
   s->fl = xmalloc(nf * sizeof *s->fl);  s->nfl = nf;
   memset(s->fl, 0, nf * sizeof *s->fl);
-  for (f = 0; f < nf; f++) {
-    q = s->fl + f;
+  Fk(nf,
+    q = s->fl + k;
     FATAL_UNLESS(tfld(z, F_FLTYPE, 1, 16) == 1,
                  "vorbis: floor type 0 is unsupported");
     q->parts = fld(z, M_PART, 5, 0);
     FATAL_UNLESS(q->parts <= VB_MAXPART, "vorbis: floor has %lu partitions",
                  (unsigned long) q->parts);
     nc = 0;
-    Fi(q->parts, {
+    Fi(q->parts,
       q->pcls[i] = (u8) fld(z, M_PCLS, 4, 0);
       FATAL_UNLESS(q->pcls[i] < VB_MAXCLASS, "vorbis: floor class %lu",
                    (unsigned long) q->pcls[i]);
-      if ((u32) q->pcls[i] + 1 > nc) nc = q->pcls[i] + 1;
-    });
-    Fi(nc, {
+      if ((u32) q->pcls[i] + 1 > nc) nc = q->pcls[i] + 1);
+    Fi(nc,
       q->cdim[i] = (u8) (tfld(z, F_CDIM, 3, 3) + 1);
       sub = tfld(z, F_CSUB, 2, 2);
       q->csub[i] = (u8) sub;  q->cbook[i] = -1;
       if (sub) q->cbook[i] = (i32) fld(z, M_MBOOK, 8, 0);
-      Fj(1UL << sub, {
+      Fj(1UL << sub,
         z->v->pb = fld(z, M_SBOOK, 8, z->v->pb);
-        q->csb[i][j] = (i32) z->v->pb - 1;
-      });
-    });
+        q->csb[i][j] = (i32) z->v->pb - 1));
     q->mult = tfld(z, F_FMUL, 2, 2) + 1;
     q->quant = QUANT[q->mult - 1];
     q->rng = tfld(z, F_RANGE, 4, 4);
     q->x[0] = 0;  q->x[1] = 1UL << q->rng;  q->posts = 2;
-    Fi(q->parts, Fj(q->cdim[q->pcls[i]], {
+    Fi(q->parts, Fj(q->cdim[q->pcls[i]],
       FATAL_UNLESS(q->posts < VB_MAXPOST, "vorbis: floor has over %d posts",
                    VB_MAXPOST);
-      q->x[q->posts++] = fld(z, M_FX, (int) q->rng, 0);
-    }));
-    fl_sort(q);
-  }
+      q->x[q->posts++] = fld(z, M_FX, (int) q->rng, 0)));
+    fl_sort(q));
 }
-
 
 /*  Floor and residue book numbers share a first-order chain. Residue book
     lists continue from their class book with second-order prediction.  */
-
 static void residues(io * z) {
   vb_setup * s = z->v->cur;
-  u32 nr, r, i, j, cb, m0, m1, v, c;
+  u32 nr, k, i, j, cb, m0, m1, v, c;
   vb_res * q;
   nr = fld(z, M_NRES, 6, 0) + 1;
   s->rs = xmalloc(nr * sizeof *s->rs);  s->nrs = nr;
   memset(s->rs, 0, nr * sizeof *s->rs);
-  for (r = 0; r < nr; r++) {
-    q = s->rs + r;
+  Fk(nr,
+    q = s->rs + k;
     q->type = tfld(z, F_RSTYPE, 2, 16);
     FATAL_UNLESS(q->type <= 2, "vorbis: residue type above 2");
     q->beg = fld(z, M_RBEG, 24, 0);  q->end = fld(z, M_REND, 24, 0);
@@ -672,7 +656,7 @@ static void residues(io * z) {
     cb = fld(z, M_RBOOK, 8, z->v->pb);
     q->cbook = cb;
     m1 = cb - z->v->pb;  m0 = cb;  z->v->pb = cb;
-    Fi(q->ncl, {
+    Fi(q->ncl,
       /*  One byte, split in the packet across a 3-bit low half and an
           optional 5-bit high half; coded whole.  */
       c = 0;
@@ -683,27 +667,24 @@ static void residues(io * z) {
       if (!z->enc) {
         bput(z, 3, c & 7);  bput(z, 1, c >> 3 ? 1 : 0);
         if (c >> 3) bput(z, 5, c >> 3);
-      }
-    });
-    Fi(q->ncl, Fj(8, {
+      });
+    Fi(q->ncl, Fj(8,
       q->book[i][j] = -1;
       if (!(q->casc[i] & (1UL << j))) continue;
       v = fld(z, M_RBOOK, 8, m0 + m1);  m1 = v - m0;  m0 = v;
-      q->book[i][j] = (i32) v;
-    }));
-  }
+      q->book[i][j] = (i32) v)));
 }
 
 
 static void mappings(io * z, u32 ch) {
   vb_setup * s = z->v->cur;
-  u32 nm, m, i, sub = 1, steps = 0, nmode, fl;
+  u32 nm, j, i, sub = 1, steps = 0, nmode, fl;
   vb_map * q;
   nm = fld(z, M_NMAP, 6, 0) + 1;
   s->mp = xmalloc(nm * sizeof *s->mp);  s->nmp = nm;
   memset(s->mp, 0, nm * sizeof *s->mp);
-  for (m = 0; m < nm; m++) {
-    q = s->mp + m;
+  Fj(nm,
+    q = s->mp + j;
     cst(z, 16, 0);                            /*  mapping type  */
     /*  The counts imply their preceding flags.  */
     if (z->enc) {
@@ -722,33 +703,28 @@ static void mappings(io * z, u32 ch) {
     q->sub = sub;  q->nstep = steps;
     FATAL_UNLESS(steps <= VB_MAXCH, "vorbis: %lu coupling steps",
                  (unsigned long) steps);
-    Fi(steps, {
+    Fi(steps,
       q->mag[i] = (u8) fld(z, M_MAGANG, (int) blr_ilog(ch - 1), 0);
       q->ang[i] = (u8) fld(z, M_MAGANG, (int) blr_ilog(ch - 1), 0);
       FATAL_UNLESS(q->mag[i] < ch && q->ang[i] < ch && q->mag[i] != q->ang[i],
                    "vorbis: invalid coupling channels %d/%d of %lu",
-                   q->mag[i], q->ang[i], (unsigned long) ch);
-    });
+                   q->mag[i], q->ang[i], (unsigned long) ch));
     cst(z, 2, 0);                             /*  reserved  */
-    if (sub > 1) Fi(ch, {
+    if (sub > 1) Fi(ch,
       q->mux[i] = (u8) fld(z, M_MUX, 4, 0);
       FATAL_UNLESS(q->mux[i] < sub, "vorbis: channel %lu maps to submap %d of %lu",
                    (unsigned long) i, q->mux[i],
-                   (unsigned long) sub);
-    });
-    Fi(sub, {
+                   (unsigned long) sub));
+    Fi(sub,
       fld(z, M_SMT, 8, 0);
-      q->fl[i] = (u8) fld(z, M_SMF, 8, 0);  q->rs[i] = (u8) fld(z, M_SMR, 8, 0);
-    });
-  }
+      q->fl[i] = (u8) fld(z, M_SMF, 8, 0);  q->rs[i] = (u8) fld(z, M_SMR, 8, 0)));
   nmode = fld(z, M_NMODE, 6, 0) + 1;
   FATAL_UNLESS(nmode <= VB_MAXMODE, "vorbis: %lu modes", (unsigned long) nmode);
   s->nmd = nmode;
-  Fi(nmode, {
+  Fi(nmode,
     s->blockflag[i] = (u8) tfld(z, F_BLKF, 1, 1);
     cst(z, 16, 0);  cst(z, 16, 0);            /*  window and transform  */
-    s->mdmap[i] = (u8) fld(z, M_MDMAP, 8, 0);
-  });
+    s->mdmap[i] = (u8) fld(z, M_MDMAP, 8, 0));
   cst(z, 1, 1);                               /*  framing  */
 }
 
@@ -772,13 +748,13 @@ static void ident(io * z) {
                (unsigned long) n->bs0, (unsigned long) n->bs1);
 }
 
-/*  Code comment-header bytes with a tree banked by the prior top nibble.  */
+/*  Bank comment-byte trees by the prior high nibble.  */
 static void comment(io * z) {
   u32 prev = 0, i, idx, bank;
   int k, b = 0;
   u16 * s;
   u8 * sc;
-  for (i = 0; i < z->len; i++) {
+  Fi(z->len,
     bank = prev >> 4;
     if (bank >= VB_CBANK) bank = VB_CBANK - 1;
     s = z->v->cmt + bank * VB_CSIZE;  idx = 1;
@@ -788,8 +764,7 @@ static void comment(io * z) {
       idx = idx * 2 + (u32) b;
     }
     prev = idx - VB_CSIZE;
-    if (!z->enc) z->b[i] = (u8) prev;
-  }
+    if (!z->enc) z->b[i] = (u8) prev);
   z->pos = z->len * 8;
 }
 
@@ -799,15 +774,14 @@ static void su_check(vb_setup * s) {
   /*  Refuse floors beyond the model arena's explicit capacity.  */
   FATAL_UNLESS(s->nfl <= VB_MAXFLOOR, "vorbis: %lu floors, limit %d",
                (unsigned long) s->nfl, VB_MAXFLOOR);
-  Fi(s->nfl, Fj(VB_MAXCLASS, {
+  Fi(s->nfl, Fj(VB_MAXCLASS,
     u32 k;
     FATAL_UNLESS(s->fl[i].cbook[j] < (i32) s->nbk, "vorbis: floor master book %ld",
                  (long) s->fl[i].cbook[j]);
-    for (k = 0; k < 8; k++)
+    Fk(8,
       FATAL_UNLESS(s->fl[i].csb[j][k] < (i32) s->nbk, "vorbis: floor subclass "
-                   "book %ld", (long) s->fl[i].csb[j][k]);
-  }));
-  Fi(s->nrs, {
+                   "book %ld", (long) s->fl[i].csb[j][k]))));
+  Fi(s->nrs,
     u32 c, p;
     FATAL_UNLESS(s->rs[i].cbook < s->nbk, "vorbis: residue class book %lu",
                  (unsigned long) s->rs[i].cbook);
@@ -820,14 +794,12 @@ static void su_check(vb_setup * s) {
         FATAL_UNLESS(b < (i32) s->nbk, "vorbis: residue book %ld", (long) b);
         FATAL_UNLESS(b < 0 || s->bk[b].look == 1, "vorbis: residue book %ld has "
                      "no lookup table", (long) b);
-      }
-  });
+      });
   Fi(s->nmd, FATAL_UNLESS(s->mdmap[i] < s->nmp, "vorbis: mode %lu names mapping "
                           "%d", (unsigned long) i, s->mdmap[i]));
-  Fi(s->nmp, Fj(s->mp[i].sub, {
+  Fi(s->nmp, Fj(s->mp[i].sub,
     FATAL_UNLESS(s->mp[i].fl[j] < s->nfl, "vorbis: submap floor %d", s->mp[i].fl[j]);
-    FATAL_UNLESS(s->mp[i].rs[j] < s->nrs, "vorbis: submap residue %d", s->mp[i].rs[j]);
-  }));
+    FATAL_UNLESS(s->mp[i].rs[j] < s->nrs, "vorbis: submap residue %d", s->mp[i].rs[j])));
 }
 
 static void setup(io * z) {
@@ -862,7 +834,7 @@ static void hdr(io * z, int which) {
 static void ioinit(io * z, vb_ctx * v, int enc, u8 * pkt, sz len) {
   sz i;
   z->enc = enc;  z->v = v;  z->b = pkt;  z->len = len;  z->pos = 0;
-  Fi(3, { z->e[i] = NULL;  z->d[i] = NULL; });
+  Fi(3, z->e[i] = NULL;  z->d[i] = NULL);
 }
 
 void vb_hdr_enc(vb_ctx * v, rc_enc * e, int which, const u8 * pkt, sz len) {
@@ -899,7 +871,7 @@ static const u32 AR_SIZE[A_NTAB] = {
 /*  Pack magnitude bit positions into a triangular index.  */
 static const u8 AR_TRIB[AR_MAGB + 1] = { 0, 0, 1, 3, 6, 10, 15, 21, 28 };
 
-/*  Return a checked arena index to prevent overlap with the next table.  */
+/*  Return a bounds-checked arena index.  */
 static INLINE u32 atab(const vb_ctx * v, int t, u32 idx) {
   FATAL_IF_HOT(idx >= AR_SIZE[t])
     ("vorbis: model index %lu exceeds table %d size %lu",
@@ -914,7 +886,6 @@ static INLINE u16 * ar(vb_ctx * v, u32 at) {
 }
 
 /*  Zero arena entries lazily expand to RC_PINIT.  */
-
 #define AR_LIVE(p)  do { if (!*(p)) *(p) = RC_PINIT; } while (0)
 
 /*  Code one arena bit and update its parallel observation count.  */
@@ -927,7 +898,7 @@ static INLINE int abit(io * z, u32 at, int lim, int b) {
   return b;
 }
 
-/*  Seed shared tables now and each slot's tables on first use.  */
+/*  Seed shared tables now and slot tables on demand.  */
 static void arena(vb_ctx * v) {
   u32 t, at = 0;
   if (v->ar) return;
@@ -988,7 +959,6 @@ static void bk_put(io * z, vb_book * b, u32 e) {
 
 /*  Code Floor 1 posts in ascending X order. Contexts include zero history,
     prior length at the same post, and the first two magnitude bits.  */
-
 static u32 fl_val(io * z, u32 f, u32 i, u8 * h, u32 v) {
   vb_ctx * n = z->v;
   u32 o, idx, k, a = 0, nb = 0, r;
@@ -1032,30 +1002,27 @@ static int fl_get(io * z, vb_floor * f, u32 * y) {
   if (!bget(z, 1)) return 0;
   p = blr_ilog(f->quant - 1);
   y[0] = bget(z, p);  y[1] = bget(z, p);
-  Fi(f->parts, {
+  Fi(f->parts,
     u32 c = f->pcls[i], cv0;
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) cv = bk_get(z, s->bk + f->cbook[c]);
     cv0 = cv;
-    Fk(cd, {
+    Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
-    });
+      y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0);
     /*  Recreate libvorbis's first matching subclass choice exactly.  */
     FATAL_UNLESS(!(cv0 >> (cs * cd)),
                  "vorbis: floor class codeword exceeds its dimension");
-    Fk(cd, {
+    Fk(cd,
       u32 l, d = (cv0 >> (k * cs)) & ((1UL << cs) - 1);
       for (l = 0; l < d; l++) {
         u32 mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
         FATAL_UNLESS(y[j + k] >= mx,
                      "vorbis: floor value uses a later subclass book than "
                      "the first that fits");
-      }
-    });
-    j += cd;
-  });
+      });
+    j += cd);
   return 1;
 }
 
@@ -1070,33 +1037,29 @@ static void fl_put(io * z, vb_floor * f, const u32 * y, int used) {
   FATAL_UNLESS(y[0] < (1UL << p) && y[1] < (1UL << p),
                "vorbis: floor post does not fit %lu bits", (unsigned long) p);
   bput(z, p, y[0]);  bput(z, p, y[1]);
-  Fi(f->parts, {
+  Fi(f->parts,
     u32 c = f->pcls[i];
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) {
-      Fk(cd, {
+      Fk(cd,
         for (l = 0; l < (1UL << cs); l++) {
           mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
           if (y[j + k] < mx) break;
         }
         FATAL_UNLESS(l < (1UL << cs), "vorbis: no class %lu book fits value %lu",
                      (unsigned long) c, (unsigned long) y[j + k]);
-        cv |= l << (k * cs);
-      });
+        cv |= l << (k * cs));
       bk_put(z, s->bk + f->cbook[c], cv);
     }
-    Fk(cd, {
+    Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      if (b >= 0) bk_put(z, s->bk + b, y[j + k]);
-    });
-    j += cd;
-  });
+      if (b >= 0) bk_put(z, s->bk + b, y[j + k]));
+    j += cd);
 }
 
 /*  Store each residue entry as centered base-`nv` multiplicand digits.  */
 /*  Each CM stage has a bit history, state map, and mixer.  */
-
 const u8 CM_LEVMASK[CM_NLEV] =
   { 0x00, 0x05, 0x1D, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F };
 
@@ -1131,10 +1094,10 @@ static INLINE int pbit(io * z, u32 off, int st, int sel, u32 h, int exp,
   (h_##L ? pbit(z, (off_), (st_), psel, h_##0, mex, (bit_))                   \
          : abit(z, (off_), lim, (bit_)))
 
-/*  Reuse the precomputed invariant half of the bit-history key.  */
+/*  Reuse the invariant half of the history key.  */
 #define PHASH(st_) cm_hst(phb, phx, (u32) (st_))
 
-/*  Compute each enabled stage's key once and reuse it for all its bits.  */
+/*  Reuse one key per enabled stage.  */
 #define PHASHES(v_, st_)                                                      \
   u32 v_##0 = 0;                                                              \
   int v_##L = (n->cm_mask >> (st_)) & 1;                                      \
@@ -1299,7 +1262,7 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
   i32 d;
   if (z->enc) { e = bk_get(z, b);  t = e; }
   if (il) { c = g / il;  ch = g % il; } else { c = g;  ch = 0; }
-  Fk(b->dim, {
+  Fk(b->dim,
     u32 chc = ch > 3 ? 3 : ch;
     if (z->enc) {
       d = (i32) b->mult[t % b->nv] - (i32) b->off;  t /= b->nv;
@@ -1317,8 +1280,7 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
       e += p * np;  np *= b->nv;
     }
     if (il) { ch += st;  while (ch >= il) { ch -= il;  c++; } }
-    else c += st;
-  });
+    else c += st);
   if (!z->enc) {
     FATAL_IF_HOT(e >= b->ent)("vorbis: residue has no codebook entry");
     bk_put(z, b, e);
@@ -1362,7 +1324,7 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
     pc = 0;
     while (pc < np) {
       if (!pass)
-        Fj(vch, {
+        Fj(vch,
           if (z->enc) {
             cw = bk_get(z, cb);
             for (k = pv; k > 0; k--) { cl[j * w + pc + k - 1] = cw % r->ncl;
@@ -1377,11 +1339,10 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
             cw = 0;
             Fk(pv, cw = cw * r->ncl + cl[j * w + pc + k]);
             bk_put(z, cb, cw);
-          }
-        });
-      Fk(pv, {
+          });
+      Fk(pv,
         if (pc >= np) break;
-        Fj(vch, {
+        Fj(vch,
           i32 bn;
           FATAL_IF_HOT(cl[j * w + pc] >= r->ncl)
             ("vorbis: residue class %lu, limit %lu",
@@ -1389,10 +1350,8 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
           bn = r->book[cl[j * w + pc]][pass];
           PROF(prof_rcls = cl[j * w + pc];  prof_rpart = pc);
           if (bn >= 0)
-            rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il);
-        });
-        pc++;
-      });
+            rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il));
+        pc++);
     }
   }
 }
@@ -1403,7 +1362,7 @@ static void payload(io * z, u32 mode) {
   vb_setup * s = v->cur;
   vb_map * mp = s->mp + s->mdmap[mode];
   u32 n = (s->blockflag[mode] ? v->i.bs1 : v->i.bs0) / 2;
-  u32 ch = v->i.ch, c, i, j, m;
+  u32 ch = v->i.ch, k, i, j, m;
   u8 nz[VB_MAXCH], sub[VB_MAXCH];
   u32 * y = scratch(&v->ys, &v->ysn, (sz) ch * VB_MAXPOST);
 
@@ -1411,31 +1370,29 @@ static void payload(io * z, u32 mode) {
       absent from the current identification header.  */
   memset(nz, 0, sizeof nz);
 
-  for (c = 0; c < ch; c++) {
-    u32 fno = mp->fl[mp->mux[c]];
+  Fk(ch,
+    u32 fno = mp->fl[mp->mux[k]];
     vb_floor * f = s->fl + fno;
-    u32 * yc = y + c * VB_MAXPOST;
+    u32 * yc = y + k * VB_MAXPOST;
     u8 h = 0;
     int u = 0;
-    PROF(prof_ch = c);
+    PROF(prof_ch = k);
     if (z->enc) u = fl_get(z, f, yc);
     PROF(prof_site = P_USED);
     u = abit(z, atab(v, A_USED, v->hu), v->t.alim, u);
     PROF(prof_site = P_VOTHER);
     v->hu = (u8) ((u + v->hu * 2) & 3);
-    nz[c] = (u8) u;
+    nz[k] = (u8) u;
     if (u)
-      Fi(f->posts, { u32 p = f->srt[i];
-                     yc[p] = fl_val(z, fno, p, &h, z->enc ? yc[p] : 0); });
-    if (!z->enc) fl_put(z, f, yc, u);
-  }
+      Fi(f->posts, u32 p = f->srt[i];
+                     yc[p] = fl_val(z, fno, p, &h, z->enc ? yc[p] : 0));
+    if (!z->enc) fl_put(z, f, yc, u));
   Fi(mp->nstep, if (nz[mp->mag[i]] || nz[mp->ang[i]])
                   nz[mp->mag[i]] = nz[mp->ang[i]] = 1);
-  Fi(mp->sub, {
+  Fi(mp->sub,
     m = 0;
     Fj(ch, if (mp->mux[j] == i) sub[m++] = nz[j]);
-    if (m) residue(z, mp->rs[i], sub, m, n);
-  });
+    if (m) residue(z, mp->rs[i], sub, m, n));
 }
 
 static sz audio(io * z, int cont) {
@@ -1468,14 +1425,13 @@ static sz audio(io * z, int cont) {
 
   w[0] = w[1] = 0;
   if (v->cur->blockflag[md])
-    Fi(2, {
+    Fi(2,
       /*  aw[0] is the previous-window flag's pair of slots, aw[1] the
           next-window flag's; each is indexed by the other's history.  */
       w[i] = cbit(z, S_MODE, v->aw[i] + v->pw[!i],
                   v->awc[i] + v->pw[!i],
                   z->enc ? (int) bget(z, 1) : 0);
-      if (!z->enc) bput(z, 1, (u32) w[i]);
-    });
+      if (!z->enc) bput(z, 1, (u32) w[i]));
   v->pm = (u8) md;  v->pw[0] = (u8) w[0];  v->pw[1] = (u8) w[1];
   payload(z, md);
   /*  Only byte-alignment padding may remain.  */

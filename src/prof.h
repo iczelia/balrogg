@@ -27,7 +27,7 @@ enum {
   P_CLASS,                                     /*  partition classes  */
   P_FZERO, P_FLEN, P_FMAG, P_USED,             /*  floor curve  */
   P_VOTHER,                                    /*  setup, modes, framing  */
-  P_PVQ, P_THETA, P_FINE, P_COARSE,            /*  Opus, the big four  */
+  P_PVQ, P_THETA, P_FINE, P_COARSE,            /*  Opus components that dominate the bitrate  */
   P_OICDF, P_OLOGP, P_OUINT, P_OOTHER,
   P_N
 };

@@ -17,9 +17,10 @@
 #include "ogg.h"
 #include "vorbis.h"
 
-/*  Link metadata with back-reference models shared across links.  */
+/*  Link metadata and shared back-reference models.  */
 
-#define C_CONT  0             /*  and C_CONT + 1: banked by the last cont  */
+#define C_CONT  0             /*  and C_CONT + 1: the link-continues bit, banked
+                                  by its previous value  */
 #define C_SEL   2
 #define C_REC   6
 #define C_DUP   10
@@ -62,35 +63,33 @@ static u32 pkt_samples(const vb_ctx * v, const u8 * pk) {
   return (v->cur->blockflag[md] ? v->i.bs1 : v->i.bs0) / 2;
 }
 
-/*  Count samples where packets end, carrying continued packets forward.  */
+/*  Count samples at packet boundaries.  */
 static u32 samples(const vb_ctx * v, const ogg_page * p, const u8 * body,
                    u32 * carry) {
   int i, frag = p->np > 0 && (p->type & 1);
   sz at = 0;
   u32 s = 0, tl = 0;
-  for (i = 0; i < p->np; i++) {
+  Fi(p->np,
     const u8 * pk = body + at;
     sz pl = p->plen[i];
     int last = i == p->np - 1;
     at += pl;
     if (!pl || (i == 0 && frag)) continue;
     if (last && p->tail) tl = pkt_samples(v, pk);
-    else s += pkt_samples(v, pk);
-  }
+    else s += pkt_samples(v, pk));
   if (frag && !(p->np == 1 && p->tail)) { s += *carry;  *carry = 0; }
   if (tl) *carry = tl;
   return s;
 }
 
-/*  Deduplicate only pages made entirely of complete headers.  */
+/*  Deduplicate pages containing only complete headers.  */
 static int allhdr(const ogg_page * p, const u8 * body) {
   int i;
   sz at = 0;
   if (p->np == 0 || p->tail || (p->type & 1)) return 0;
-  for (i = 0; i < p->np; i++) {
+  Fi(p->np,
     if (!p->plen[i] || !(body[at] & 1)) return 0;
-    at += p->plen[i];
-  }
+    at += p->plen[i]);
   return 1;
 }
 
@@ -125,7 +124,6 @@ static void join_pkt(const pg_t * pg, int i, int z, sz off, sz pl, sz total,
   }
 }
 
-
 typedef struct { u8 * b;  sz n, cap; } obuf;
 
 static void ob_init(obuf * o) {
@@ -151,7 +149,7 @@ static void replay(obuf * o, sz off, sz len, u32 serial) {
   memcpy(d, o->b + off, len);
   while (at < len) {
     got = ogg_parse(&q, d + at, len - at);
-    FATAL_UNLESS(got != 0, "a replayed run is not a whole number of pages");
+    FATAL_UNLESS(got != 0, "replayed run is not page-aligned");
     d[at + 14] = (u8) serial;  d[at + 15] = (u8) (serial >> 8);
     d[at + 16] = (u8) (serial >> 16);  d[at + 17] = (u8) (serial >> 24);
     ogg_crc_set(d + at, got);
@@ -161,7 +159,6 @@ static void replay(obuf * o, sz off, sz len, u32 serial) {
 }
 
 /*  Compare runs while ignoring serial numbers and CRCs.  */
-
 static int samerun(const u8 * x, const u8 * y, sz n) {
   sz at = 0, got, i;
   ogg_page q;
@@ -175,7 +172,7 @@ static int samerun(const u8 * x, const u8 * y, sz n) {
   return 1;
 }
 
-/*  Return the byte ranges used for whole-link and header comparison.  */
+/*  Find the ranges used for link and header comparison.  */
 static void runof(const pg_t * pg, const lnk_t * l, sz * off, sz * len) {
   *off = pg[l->a].off;
   *len = pg[l->z].off + pg[l->z].len - *off;
@@ -196,7 +193,7 @@ void vb_opt_default(vb_opt * o) { o->flags = 0x09;  o->dd = o->df = 0;
                                  o->search = 0; }
 
 
-/*  Encode one link. Solid mode retains probabilities and slots.  */
+/*  Encode one link. Solid mode retains model state.  */
 static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
                      const lnk_t * l, int solid) {
   rc_enc et, em, eb;
@@ -213,7 +210,7 @@ static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
   for (i = l->a; i <= l->z; i++) {
     sz at = 0;
     if (!pg[i].skip) ogg_hdr_enc(h, &em, &pg[i].p, i == l->a);
-    for (j = 0; j < pg[i].p.np; j++) {
+    Fj(pg[i].p.np,
       const u8 * pk = pg[i].body + at;
       sz pl = pg[i].p.plen[j];
       sz off = at;
@@ -249,8 +246,7 @@ static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
           vb_hdr_enc(v, &eb, w, pk, pl);
         }
         w++;
-      } else vb_aud_enc(v, &eb, &em, &et, pk, pl, pg[i].p.type & 1);
-    }
+      } else vb_aud_enc(v, &eb, &em, &et, pk, pl, pg[i].p.type & 1));
     ogg_hdr_step(h, samples(v, &pg[i].p, pg[i].body, &carry));
   }
   FATAL_UNLESS(!cont, "continued packet is %lu bytes short",
@@ -294,9 +290,9 @@ static u8 * pack_once(const u8 * buf, sz len, const char * in,
   }
   FATAL_UNLESS(np > 0, "%s: not an Ogg bitstream", in);
 
-  /*  Split at a BOS page only after the prior link reaches EOS.  */
+  /*  BOS starts a link only after EOS.  */
   lk = xmalloc((sz) np * sizeof *lk);
-  Fi((sz) np, {
+  Fi((sz) np,
     if ((pg[i].p.type & 2) && eos) {
       lk[nl].a = lk[nl].z = (int) i;  lk[nl].serial = pg[i].p.serial;
       lk[nl].rep = lk[nl].hdup = -1;  lk[nl].rec = lk[nl].keep = 0;
@@ -308,8 +304,7 @@ static u8 * pack_once(const u8 * buf, sz len, const char * in,
     FATAL_UNLESS(!eos, "%s: page %lu follows end of stream", in,
                  (unsigned long) i);
     lk[nl - 1].z = (int) i;
-    if (pg[i].p.type & 4) eos = 1;
-  });
+    if (pg[i].p.type & 4) eos = 1);
   FATAL_UNLESS(eos, "%s: final bitstream has no end-of-stream page", in);
 
   /*  Find whole-link and header-page repeats in one pass.  */
@@ -396,7 +391,8 @@ static u8 * pack_once(const u8 * buf, sz len, const char * in,
   return arc;
 }
 
-/*  Tune candidates in corpus win order.  */
+/*  Tune candidates, the most often smallest first, so a short search
+    still finds a good one.  */
 static const u8 TRY_ALIM[] = { 40, 200, 61, 255, 90, 25, 150 };
 static const u8 TRY_LR[]   = { 10, 5, 3 };
 #define NALIM ((int) (sizeof TRY_ALIM))
@@ -408,7 +404,7 @@ typedef struct {
   int left;                   /*  trial encodes still affordable  */
 } search;
 
-/*  Try one tune and keep it if smaller. Return 0 when the budget is spent.  */
+/*  Keep a tune if it helps. Return 0 when the budget is spent.  */
 static int trial(search * s, const vb_tune * t) {
   sz alen;
   u8 * arc;
@@ -439,14 +435,12 @@ void vb_pack(const char * in, const char * out, const vb_opt * o) {
   trial(&s, &t);
   t = s.bt;  t.flags |= VB_TF_MATCH;
   trial(&s, &t);
-  for (k = 0; k < NALIM; k++) {
+  Fk(NALIM,
     t = s.bt;  t.alim = TRY_ALIM[k];
-    if (!trial(&s, &t)) break;
-  }
-  for (k = 0; k < NLR; k++) {
+    if (!trial(&s, &t)) break);
+  Fk(NLR,
     t = s.bt;  t.lr = TRY_LR[k];
-    if (!trial(&s, &t)) break;
-  }
+    if (!trial(&s, &t)) break);
 
   spew(out, s.best, s.blen);
   free(s.best);  free(buf);
@@ -535,14 +529,13 @@ void vb_unpack(const char * in, const char * out) {
     while (!done) {
       sz at = 0, pgl;
       int j;
-      /*  Require enough input to reach the link's EOS page.  */
       FATAL_UNLESS(!rc_dec_spent(&dm) && !rc_dec_spent(&db),
-                   "%s: a link's streams ran out before its last page", in);
+                   "%s: link streams end before the final page", in);
       ogg_hdr_dec(&h, &dm, &q, first);
       FATAL_UNLESS(q.blen <= MAXPAY, "%s: a page claims %lu payload bytes", in,
                    (unsigned long) q.blen);
       memset(body, 0, q.blen);
-      for (j = 0; j < q.np; j++) {
+      Fj(q.np,
         sz pl = q.plen[j];
         /*  Copy a fragment from the packet decoded on an earlier page.  */
         if (j == 0 && (q.type & 1) && cont) {
@@ -573,13 +566,12 @@ void vb_unpack(const char * in, const char * out) {
         }
         if (w < 3) { vb_hdr_dec(&v, &db, w, body + at, pl);  w++; }
         else vb_aud_dec(&v, &db, &dm, &dt, body + at, pl, q.type & 1);
-        at += pl;
-      }
+        at += pl);
       pgl = ogg_emit(&q, ob_room(&ob, OGG_HDRMIN + (sz) q.nseg + q.blen), body);
       ob.n += pgl;
       if (first) {
         ser = q.serial;
-        /*  Replay headers with this serial and advance the header count.  */
+        /*  Replay headers with the current serial.  */
         if (isdup) { replay(&ob, hoff, hlen, ser);  w += hpk; }
         first = 0;
       }

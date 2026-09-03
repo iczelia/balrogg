@@ -140,7 +140,7 @@ static void t_batch(void) {
   const char * log = xt_tmp("cli.log"), * notogg = xt_tmp("notogg.ogg");
   int i, ok = 1;
   xt_section_begin("cli batch");
-  for (i = 0; i < 3; i++) {
+  Fi(3,
     sz n;
     u8 * b;
     char tag[16];
@@ -150,20 +150,18 @@ static void t_batch(void) {
     strcpy(blr[i], xt_batch_name(1, copy[i]));
     CHECK(!strcmp(xt_batch_name(0, blr[i]), copy[i]),
           "batch names round-trip: %s", copy[i]);
-    b = slurp(src, &n);  spew(copy[i], b, n);  free(b);
-  }
+    b = slurp(src, &n);  spew(copy[i], b, n);  free(b));
   sprintf(args, "-b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
   CHECK(xt_run(args, log) == 0, "batch encode");
-  for (i = 0; i < 3; i++) if (xt_file_size(blr[i]) <= 0) ok = 0;
+  Fi(3, if (xt_file_size(blr[i]) <= 0) ok = 0);
   CHECK(ok, "batch encode wrote every .blr");
-  for (i = 0; i < 3; i++) xt_unlink(copy[i]);
+  Fi(3, xt_unlink(copy[i]));
   sprintf(args, "-b d %s %s %s", blr[0], blr[1], blr[2]);
   CHECK(xt_run(args, log) == 0, "batch decode");
-  for (i = 0; i < 3; i++) {
+  Fi(3,
     src = xt_fixture(xt_data, NAMES[i]);
     CHECK(xt_same_file(src, copy[i]), "batch decode of %s", NAMES[i]);
-    xt_unlink(copy[i]);  xt_unlink(blr[i]);
-  }
+    xt_unlink(copy[i]);  xt_unlink(blr[i]));
   /*  A batch with a refused file reports it and carries on.  */
   spew(notogg, (const u8 *) "not an ogg file at all", 22);
   src = xt_fixture(xt_data, NAMES[0]);
@@ -235,7 +233,7 @@ static void t_damaged(void) {
   sprintf(args, "-2 e \"%s\" \"%s\"", fx, arc);
   if (xt_run(args, log) != 0) { CHECK(0, "encode for the damage test");  return; }
   b = slurp(arc, &n);
-  for (i = 0; i < sizeof CUT / sizeof *CUT; i++) {
+  Fi(sizeof CUT / sizeof *CUT,
     sz cut = CUT[i] < 0 ? n + (sz) CUT[i] : (sz) CUT[i];
     int rc;
     if (cut >= n) continue;
@@ -244,9 +242,8 @@ static void t_damaged(void) {
     sprintf(args, "d \"%s\" \"%s\"", bad, out);
     rc = xt_run(args, log);
     CHECK(rc == BLR_EXIT_REFUSED || (rc == BLR_EXIT_OK && xt_same_file(fx, out)),
-          "archive truncated to %lu bytes: exit %d", (unsigned long) cut, rc);
-  }
-  for (k = 0; k < 2; k++) {
+          "archive truncated to %lu bytes: exit %d", (unsigned long) cut, rc));
+  Fk(2,
     sz at = k ? n - 3 : (sz) 12;
     int rc;
     if (at >= n) continue;
@@ -258,8 +255,7 @@ static void t_damaged(void) {
     rc = xt_run(args, log);
     CHECK(rc == BLR_EXIT_REFUSED || rc == BLR_EXIT_OK, "byte %lu flipped: exit %d",
           (unsigned long) at, rc);
-    /*  Undetectable corruption may change output, so check only the exit path.  */
-  }
+    /*  Undetectable corruption may change output, so check only the exit path.  */);
   free(b);
   xt_unlink(log);  xt_unlink(arc);  xt_unlink(bad);  xt_unlink(out);
 }
@@ -298,7 +294,7 @@ static void merged_link(obuf * o, const u8 * src, sz len, int keep, u32 serial) 
     if (state == 0) { ob_page(o, &p, b);  seq++;  state = 1;  continue; }
     if (state == 1) {
       /*  Accumulate packets until the first audio page is folded in.  */
-      for (i = 0; i < (sz) p.np; i++) m.plen[m.np++] = p.plen[i];
+      Fi((sz) p.np, m.plen[m.np++] = p.plen[i]);
       memcpy(body + mbody, b, p.blen);  mbody += p.blen;
       if (!(b[0] & 1)) {
         m.type = (u8) (p.type & 4);  m.glo = p.glo;  m.ghi = p.ghi;  m.serial = serial;

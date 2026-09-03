@@ -21,7 +21,7 @@
 #define VB_MAXBOOK  256           /*  a setup carries at most 256 codebooks  */
 #define VB_MAXCLASS 16            /*  floor 1 class numbers are 4 bits  */
 #define VB_MAXPART  32            /*  floor 1 partition count is 5 bits  */
-#define VB_MAXPOST  256           /*  ... and 2 + 31*8 values, so 250  */
+#define VB_MAXPOST  256           /*  at most 2 + 31*8 = 250 posts, rounded up  */
 #define VB_MAXRCL   64            /*  residue classifications are 6 bits + 1  */
 #define VB_MAXSUB   16
 #define VB_MAXCH    256
@@ -130,8 +130,8 @@ typedef struct {
   u8 * len;
 } vb_slot;
 
-#define VB_NSLOT   32         /*  1 << ((flags & 7) + 4), flags = 0x09  */
-#define VB_MAXSLOT 128        /*  ... and the largest -s3 selects  */
+#define VB_NSLOT   32         /*  the default pool, for the flags byte 0x09  */
+#define VB_MAXSLOT 128        /*  the largest pool vb_slots accepts  */
 
 /*  Audio model tables share one mixed-radix arena.  */
 
@@ -176,13 +176,14 @@ enum {
 
 /*  Five stages: zero flag, sign, magnitude == 1, bit length, mantissa.  */
 #define CM_NST     5
-#define CM_BITS    18            /*  the knee; 20 buys nothing off-training  */
-#define CM_SEL     200           /*  (c1, cx, ch, memc)  */
-/*  Per-file adaptation cap, CM rate, and feature flags.  */
-
+#define CM_BITS    18
+#define CM_SEL     200           /*  weight rows: 5 previous-digit classes x 5
+                                     cross-channel classes x 2 channel parities x
+                                     4 memory bits  */
 #define VB_TF_CLS  0x01
 #define VB_TF_MATCH 0x02          /*  the residue digit match model  */
 
+/*  Per-file adaptation cap, CM rate, and feature flags.  */
 typedef struct { u8 alim, lr, flags; } vb_tune;
 
 #define VB_TUNE_LEN 3
@@ -196,7 +197,7 @@ extern const u8 CM_LEVMASK[CM_NLEV];
 typedef struct {
   model m[M_N];
   u16 f[F_NSLOT];
-  u8 fc[F_NSLOT];             /*  ... their counts; used only when ad  */
+  u8 fc[F_NSLOT];             /*  ... their counts, for the adaptive coder  */
   u16 * cmt;                  /*  VB_CBANK * VB_CSIZE comment-byte nodes  */
   u8 * cmtc;
   u32 pb;                     /*  last codebook index  */

@@ -17,7 +17,7 @@
 
 #include "common.h"
 
-/*  Header, optional tune, and length-prefixed streams ending in zero.  */
+/*  Header, optional tune, and zero-terminated stream list.  */
 #define ARC_MAGIC     "BALROGG"
 #define ARC_MAGLEN    (sizeof ARC_MAGIC - 1)
 #define ARC_HDRLEN    (ARC_MAGLEN + 2)
@@ -31,7 +31,7 @@
 #define ARC_SOLID(f)  (((f) >> 3) & 1)
 #define ARC_BLOCK(f)  (1024UL << (((f) & 7) + 4))
 #define ARC_OPUS      0x10
-/*  Codec effort means Opus PVQ depth or Vorbis mixed residue stages.  */
+/*  Opus PVQ depth or Vorbis residue stages.  */
 #define ARC_LEVEL(f)  (((f) >> 5) & 7)
 
 typedef struct {
@@ -49,11 +49,11 @@ typedef struct {
 
 void arc_init(archive * a, u8 flags);
 void arc_free(archive * a);
-/*  Append a stream, taking a copy.  */
+/*  Append a copy of a stream.  */
 void arc_push(archive * a, const u8 * data, sz len);
 /*  Parse in place, rejecting malformed archives.  */
 void arc_parse(archive * a, const u8 * buf, sz len);
-/*  Serialize into a caller-owned buffer.  */
+/*  Return a newly allocated image.  */
 u8 * arc_emit(const archive * a, sz * len);
 
 sz arc_varint_len(u32 v);

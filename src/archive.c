@@ -99,14 +99,13 @@ u8 * arc_emit(const archive * a, sz * len) {
   FATAL_UNLESS(a->ntune <= ARC_TUNEMAX, "invalid tune length %u",
                (unsigned) a->ntune);
   if (a->ntune) n += 1 + a->ntune;
-  Fi(a->n, {
+  Fi(a->n,
     sz add;
     FATAL_UNLESS(a->s[i].len > 0 && a->s[i].len <= ARC_VMAX,
                  "invalid stream length %lu", (unsigned long) a->s[i].len);
     add = arc_varint_len((u32) a->s[i].len) + a->s[i].len;
     FATAL_UNLESS(add <= SIZE_MAX - n, "archive is too large");
-    n += add;
-  });
+    n += add);
   b = xmalloc(n);
   memcpy(b, ARC_MAGIC, ARC_MAGLEN);
   b[ARC_MAGLEN] = (u8) (a->ntune ? ARC_VER : 0);

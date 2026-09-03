@@ -12,7 +12,7 @@
     You should have received a copy of the GNU General Public License
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
-/*  Command-line handling, codec detection, and batch execution.  */
+/*  Command line and batch execution.  */
 
 #include "codec.h"
 #include "archive.h"
@@ -22,19 +22,27 @@
 #include "rc.h"
 #include "yarg.h"
 #include "opusmode.h"
+#include "cpu.h"
 
 #include <errno.h>
 #include <limits.h>
+#ifdef BLR_WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#else
 #include <sys/stat.h>
+#endif
 #ifdef HAVE_UNISTD_H
 #include <unistd.h>
 #endif
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
-#ifdef BLR_WIN32
-#include <windows.h>
-#include <process.h>
+
+/*  The Windows 95 runtime calls blr_main from its own entry point.  */
+#if defined(BLR_WIN_LEGACY)
+int blr_main(int argc, char ** argv);
+#define main blr_main
 #endif
 
 static void banner(FILE * to) {
@@ -71,6 +79,8 @@ static void version(void) {
          "This is free software: you are free to change and redistribute it.\n"
          "There is NO WARRANTY, to the extent permitted by law.\n");
   printf("Ogg Opus mode: %s\n", opus_mode_version());
+  printf("SIMD: %s built, %s dispatched\n", blr_simd_built(),
+         blr_simd_dispatched());
 }
 
 static void dump(const char * path) {
@@ -120,7 +130,7 @@ static void pages(const char * path) {
   free(img);  free(b);
 }
 
-/*  Read up to `max` bytes, returning -1 when the file cannot be opened.  */
+/*  Read up to `max` bytes; return -1 if open fails.  */
 static int peek(const char * path, u8 * b, int max) {
   sz n;
   int bad;
@@ -148,7 +158,7 @@ static int sniff(const char * path) {
   return F_UNKNOWN;
 }
 
-/*  Check the mode flag using offsets derived from the magic length.  */
+/*  Detect an Opus archive.  */
 static int arc_is_opus(const char * path) {
   u8 b[ARC_HDRLEN];
   int n = peek(path, b, (int) sizeof b);
@@ -156,8 +166,66 @@ static int arc_is_opus(const char * path) {
          && b[ARC_MAGLEN] <= ARC_VER && (b[ARC_MAGLEN + 1] & ARC_OPUS);
 }
 
-/*  Levels 1 through 4 add model stages. Higher levels search Vorbis tunes or
-    deepen Opus PVQ splits.  */
+/*  File identity and size without the C runtime's stat(), which the
+    Windows 95 build lacks and which reports no inode on Windows anyway.  */
+typedef unsigned long long bytes_t;
+
+#if defined(BLR_WIN32)
+
+static int same_file(const char * a, const char * b) {
+  BY_HANDLE_FILE_INFORMATION x, y;
+  HANDLE ha, hb;
+  int same = 0;
+  if (!strcmp(a, b)) return 1;
+  ha = CreateFileA(a, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                   OPEN_EXISTING, 0, NULL);
+  if (ha == INVALID_HANDLE_VALUE) return 0;
+  hb = CreateFileA(b, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                   OPEN_EXISTING, 0, NULL);
+  if (hb != INVALID_HANDLE_VALUE) {
+    if (GetFileInformationByHandle(ha, &x) && GetFileInformationByHandle(hb, &y))
+      same = x.dwVolumeSerialNumber == y.dwVolumeSerialNumber
+             && x.nFileIndexHigh == y.nFileIndexHigh
+             && x.nFileIndexLow == y.nFileIndexLow;
+    CloseHandle(hb);
+  }
+  CloseHandle(ha);
+  return same;
+}
+
+/*  The size of a regular file, or zero.  */
+static bytes_t file_size(const char * path) {
+  DWORD lo, hi = 0, attr = GetFileAttributesA(path);
+  HANDLE h;
+  if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
+    return 0;
+  h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
+                  OPEN_EXISTING, 0, NULL);
+  if (h == INVALID_HANDLE_VALUE) return 0;
+  lo = GetFileSize(h, &hi);
+  CloseHandle(h);
+  if (lo == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) return 0;
+  return ((bytes_t) hi << 32) | lo;
+}
+
+#else
+
+static int same_file(const char * a, const char * b) {
+  struct stat si, so;
+  if (!strcmp(a, b)) return 1;
+  return !stat(a, &si) && !stat(b, &so) &&
+         si.st_dev == so.st_dev && si.st_ino == so.st_ino;
+}
+
+static bytes_t file_size(const char * path) {
+  struct stat st;
+  if (stat(path, &st) || !S_ISREG(st.st_mode) || st.st_size <= 0) return 0;
+  return (bytes_t) st.st_size;
+}
+
+#endif
+
+/*  Levels 1-4 add models; higher levels expand the encoder search.  */
 
 typedef struct { int vidx, odepth, search; } effort;
 
@@ -176,10 +244,8 @@ static const effort EFFORT[9] = {
 
 static int do_one(int enc, const char * in, const char * out,
                   const vb_opt * o, const effort * e) {
-  struct stat si, so;
   /*  Refuse identical paths and hard links before opening the output.  */
-  if (!strcmp(in, out) || (!stat(in, &si) && !stat(out, &so) &&
-                           si.st_dev == so.st_dev && si.st_ino == so.st_ino)) {
+  if (same_file(in, out)) {
     fprintf(stderr, "balrogg: %s is both input and output\n", in);
     return BLR_EXIT_IO;
   }
@@ -205,7 +271,7 @@ static int do_one(int enc, const char * in, const char * out,
   return BLR_EXIT_INTERNAL;
 }
 
-/*  Use one process per file because models have mutable global state.  */
+/*  Processes isolate mutable model state.  */
 
 #define BLR_JOB_FIXED (72UL << 20)
 
@@ -214,6 +280,8 @@ static long blr_cores(void) {
   SYSTEM_INFO si;
   GetSystemInfo(&si);
   return si.dwNumberOfProcessors > 0 ? (long) si.dwNumberOfProcessors : 1;
+#elif defined(BLR_DOS)
+  return 1;
 #elif defined(HAVE_SYSCONF) && defined(_SC_NPROCESSORS_ONLN)
   long n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? n : 1;
@@ -222,14 +290,21 @@ static long blr_cores(void) {
 #endif
 }
 
-/*  Available memory, including Linux reclaimable cache. Zero means unknown.  */
-typedef unsigned long long bytes_t;
+/*  Available memory, including reclaimable cache. Zero if unknown.  */
 
 static bytes_t blr_avail(void) {
-#if defined(BLR_WIN32)
+#if defined(BLR_WIN_LEGACY)
+  /*  GlobalMemoryStatusEx is NT-only; the 32-bit fields suffice here.  */
+  MEMORYSTATUS ms;
+  ms.dwLength = sizeof ms;
+  GlobalMemoryStatus(&ms);
+  return (bytes_t) ms.dwAvailPhys;
+#elif defined(BLR_WIN32)
   MEMORYSTATUSEX ms;
   ms.dwLength = sizeof ms;
   if (GlobalMemoryStatusEx(&ms)) return (bytes_t) ms.ullAvailPhys;
+  return 0;
+#elif defined(BLR_DOS)
   return 0;
 #else
   FILE * f = fopen("/proc/meminfo", "r");
@@ -249,6 +324,22 @@ static bytes_t blr_avail(void) {
 #endif
 }
 
+#if defined(BLR_DOS)
+/*  DOS replaces the extension and uses .opu for decoded Opus.  */
+static char * out_name(int enc, const char * in) {
+  sz n = strlen(in), stem;
+  const char * dot = strrchr(in, '.'), * sep = strrchr(in, '/');
+  const char * bsep = strrchr(in, '\\');
+  char * s;
+  FATAL_UNLESS(n <= SIZE_MAX - 5, "path is too long");
+  if (bsep && (!sep || bsep > sep)) sep = bsep;
+  stem = dot && (!sep || dot > sep) ? (sz) (dot - in) : n;
+  s = xmalloc(stem + 5);
+  memcpy(s, in, stem);
+  strcpy(s + stem, enc ? ".blr" : arc_is_opus(in) ? ".opu" : ".ogg");
+  return s;
+}
+#else
 static char * out_name(int enc, const char * in) {
   sz n = strlen(in);
   FATAL_UNLESS(n <= SIZE_MAX - 5, "path is too long");
@@ -259,8 +350,8 @@ static char * out_name(int enc, const char * in) {
   else strcat(s, ".out");
   return s;
 }
+#endif
 
-/*  Start larger inputs first because codec time is nearly linear in size.  */
 typedef struct { const char * name;  bytes_t size;  int order; } job;
 
 static int by_size_desc(const void * a, const void * b) {
@@ -306,36 +397,40 @@ static char * winquote(const char * s) {
   FATAL_UNLESS(n <= (SIZE_MAX - 3) / 2, "path is too long");
   char * q = xmalloc(2 * n + 3);
   q[k++] = '"';
-  for (i = 0; i < n; i++) {
+  Fi(n,
     for (bs = 0; i < n && s[i] == '\\'; i++) bs++;
     if (i == n) { while (bs--) { q[k++] = '\\';  q[k++] = '\\'; }  break; }
     if (s[i] == '"') { while (bs--) { q[k++] = '\\';  q[k++] = '\\'; }  q[k++] = '\\'; }
     else while (bs--) q[k++] = '\\';
-    q[k++] = s[i];
-  }
+    q[k++] = s[i]);
   q[k++] = '"';  q[k] = 0;
   return q;
 }
 
+/*  Re-execute this image for one file.  */
 static void pool_spawn(pool * p, const char * in, const char * out,
                        const vb_opt * o, const effort * e) {
-  const char * argv[7];
   char * qin = winquote(in), * qout = winquote(out), * qself = winquote(p->self);
-  intptr_t h;
+  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 16);
+  STARTUPINFOA si;
+  PROCESS_INFORMATION pi;
+  BOOL ok;
   if (p->jobs > MAXIMUM_WAIT_OBJECTS) p->jobs = MAXIMUM_WAIT_OBJECTS;
   while (p->live >= p->jobs) pool_reap(p);
-  argv[0] = qself;  argv[1] = p->lev;  argv[2] = "--";
-  argv[3] = p->enc ? "e" : "d";  argv[4] = qin;  argv[5] = qout;  argv[6] = NULL;
-  h = _spawnvp(_P_NOWAIT, p->self, argv);
-  free(qin);  free(qout);  free(qself);
-  if (h == -1) {                /*  cannot spawn: run it here instead  */
+  sprintf(cmd, "%s %s -- %s %s %s", qself, p->lev, p->enc ? "e" : "d", qin, qout);
+  memset(&si, 0, sizeof si);
+  si.cb = sizeof si;
+  ok = CreateProcessA(p->self, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+  free(qin);  free(qout);  free(qself);  free(cmd);
+  if (!ok) {                    /*  cannot spawn: run it here instead  */
     pool_failed(p, do_one(p->enc, in, out, o, e));
     return;
   }
-  p->h[p->live++] = (HANDLE) h;
+  CloseHandle(pi.hThread);
+  p->h[p->live++] = pi.hProcess;
 }
 
-#elif defined(HAVE_FORK) && defined(HAVE_WAITPID)
+#elif defined(HAVE_FORK) && defined(HAVE_WAITPID) && !defined(BLR_DOS)
 
 static void pool_reap(pool * p) {
   int st;
@@ -378,14 +473,10 @@ static int do_batch(int enc, const char * self, const char * lev,
   bytes_t avail;
   job * q = xmalloc((sz) (n > 0 ? n : 1) * sizeof *q);
   pool p;
-  for (i = 0; i < n; i++) {
-    struct stat st;
+  Fi(n,
     q[i].name = r->pos_args[i + 1];
-    q[i].order = i;  q[i].size = 0;
-    if (!stat(q[i].name, &st) && S_ISREG(st.st_mode) && st.st_size > 0)
-      q[i].size = (bytes_t) st.st_size;
-    if (q[i].size > big) big = q[i].size;
-  }
+    q[i].order = i;  q[i].size = file_size(q[i].name);
+    if (q[i].size > big) big = q[i].size);
   qsort(q, (sz) n, sizeof *q, by_size_desc);
   if (!jobs) {
     bytes_t per = big > (ULLONG_MAX - BLR_JOB_FIXED) / 3
@@ -402,11 +493,10 @@ static int do_batch(int enc, const char * self, const char * lev,
           n, n == 1 ? "" : "s", jobs, jobs == 1 ? "" : "s");
   p.self = self;  p.lev = lev;  p.enc = enc;  p.jobs = jobs;
   p.live = 0;  p.bad = 0;  p.status = BLR_EXIT_OK;
-  for (i = 0; i < n; i++) {
+  Fi(n,
     char * out = out_name(enc, q[i].name);
     pool_spawn(&p, q[i].name, out, o, e);
-    free(out);
-  }
+    free(out));
   while (p.live > 0) pool_reap(&p);
   free(q);
   if (p.bad) fprintf(stderr, "balrogg: %d of %d failed\n", p.bad, n);
@@ -463,7 +553,7 @@ int main(int argc, char ** argv) {
     usage(stderr);
     return BLR_EXIT_USAGE;
   }
-  for (i = 0; i < r->argc; i++) {
+  Fi(r->argc,
     int c = r->args[i].opt;
     if (c == 'h') { yarg_destroy(r);  usage(stdout);  return BLR_EXIT_OK; }
     if (c == 'v') { yarg_destroy(r);  version();  return BLR_EXIT_OK; }
@@ -474,8 +564,7 @@ int main(int argc, char ** argv) {
         yarg_destroy(r);  return BLR_EXIT_USAGE;
       }
     }
-    if (c >= '1' && c <= '9') level = c - '0';
-  }
+    if (c >= '1' && c <= '9') level = c - '0');
   np = r->pos_argc;
   if (np < 1) { yarg_destroy(r);  usage(stderr);  return BLR_EXIT_USAGE; }
   verb = r->pos_args[0];
@@ -489,11 +578,20 @@ int main(int argc, char ** argv) {
   o.flags = (u8) ((o.flags & 0x1F) | (e->vidx << 5));
   o.search = e->search;
 
-  /*  Keep one exit path so the parsed arguments are freed once.  */
+  /*  Free parsed arguments through one exit path.  */
   if (batch) {
     if (np < 1 || (strcmp(verb, "e") && strcmp(verb, "d")))
       { usage(stderr);  rc = BLR_EXIT_USAGE; }
-    else rc = do_batch(!strcmp(verb, "e"), argv[0], lev, r, &o, e, jobs);
+    else {
+      const char * self = argv[0];
+#if defined(BLR_WIN32)
+      /*  argv[0] is whatever the shell typed; children need the image.  */
+      char image[MAX_PATH];
+      DWORD got = GetModuleFileNameA(NULL, image, sizeof image);
+      if (got > 0 && got < sizeof image) self = image;
+#endif
+      rc = do_batch(!strcmp(verb, "e"), self, lev, r, &o, e, jobs);
+    }
   }
   else if (!strcmp(verb, "dump") && np == 1) dump(in);
   else if (!strcmp(verb, "pages") && np == 1) pages(in);

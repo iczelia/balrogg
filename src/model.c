@@ -69,7 +69,6 @@ static u32 bitlen(u32 v) { return blr_ilog(v) - 1; }
 
 /*  First order codes v - m0. Second order also subtracts m1. Unsigned
     arithmetic preserves required wraparound.  */
-
 static u32 fwd(model * m, u32 v) {
   u32 r, t;
   if (!m->c.order) return v;
@@ -83,7 +82,6 @@ static u32 inv(model * m, u32 r) {
   if (m->c.order > 1) { r += m->m1;  m->m1 = r; }
   m->m0 += r;  return m->m0;
 }
-
 
 void mdl_enc(model * m, rc_enc * e, u32 v) {
   u32 r = fwd(m, v), base, idx, n;
@@ -109,7 +107,6 @@ void mdl_enc(model * m, rc_enc * e, u32 v) {
     if (idx < m->c.freeze) idx = (idx * 2 | (u32) b) & (2 * m->c.freeze - 1);
   }
 }
-
 
 u32 mdl_dec(model * m, rc_dec * d) {
   u32 base, idx, n, r;

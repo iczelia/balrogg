@@ -234,8 +234,7 @@ const char * xt_tmp(const char * tag) {
   static char buf[48][128], tags[48][32];
   static int used;
   int i;
-  for (i = 0; i < used; i++)
-    if (!strcmp(tags[i], tag)) return buf[i];
+  Fi(used, if (!strcmp(tags[i], tag)) return buf[i]);
   if (used == 48) FATAL_CODE(BLR_EXIT_INTERNAL, "t_suite: too many scratch names");
   FATAL_UNLESS(strlen(tag) < sizeof tags[0], "t_suite: scratch tag is too long");
   strcpy(tags[used], tag);

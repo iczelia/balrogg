@@ -71,7 +71,6 @@ void rc_hook_set(rc_hook h, void * ctx);
 void rc_enc_hook(rc_enc * e, rc_hook h, void * ctx);
 void rc_dec_hook(rc_dec * d, rc_hook h, void * ctx);
 
-
 /*  Per-bit operations.
     Header definitions allow inlining without LTO.  */
 extern rc_hook rc_hook_fn;

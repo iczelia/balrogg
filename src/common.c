@@ -92,7 +92,7 @@ void blr_memcap(void) {
     if (*e < '0' || *e > '9' || errno || end == e || *end)
       FATAL_CODE(BLR_EXIT_USAGE, "invalid BLR_MEMCAP value '%s'", e);
   } else memcap_mb = BLR_MEMCAP_MB;
-#if defined(HAVE_SYS_RESOURCE_H) && !defined(BLR_SANITIZED)
+#if defined(HAVE_SYS_RESOURCE_H) && defined(RLIMIT_AS) && !defined(BLR_SANITIZED)
   if (memcap_mb && !BLR_SAN_LIVE) {
     struct rlimit r;
     rlim_t want = (rlim_t) memcap_mb << 20;
@@ -111,7 +111,7 @@ void blr_memcap(void) {
 
 static void oom(sz n) {
   if (memcap_mb)
-    FATAL("allocation of %lu bytes exceeds the %lu MiB cap (set BLR_MEMCAP)",
+    FATAL("allocation of %lu bytes exceeds the %lu MiB cap",
           (unsigned long) n, memcap_mb);
   FATAL("out of memory (%lu bytes)", (unsigned long) n);
 }

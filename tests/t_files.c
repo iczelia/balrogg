@@ -53,15 +53,14 @@ static void t_vorbis(void) {
   if (!*files) CHECK(0, "no Vorbis fixtures: is BLR_TEST_DATA set?");
   for (p = files; *p; p++) {
     long sizes[2];
-    for (i = 0; i < 2; i++) {
+    Fi(2,
       level(&o, i ? 9 : 1);
       vb_pack(*p, arc, &o);
       vb_unpack(arc, out);
       CHECK(xt_same_file(*p, out), "%s: not lossless at -%d", xt_basename(*p),
             i ? 9 : 1);
       sizes[i] = xt_file_size(arc);
-      tot[i] += sizes[i];
-    }
+      tot[i] += sizes[i]);
     t_reemit(arc);
     /*  Output must not depend on files encoded earlier.  */
     vb_pack(*p, arc2, &o);

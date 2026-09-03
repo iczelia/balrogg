@@ -28,10 +28,7 @@ typedef struct {
 /*  Predict digits from the most recent matching ring-buffer context.  */
 #define CM_MHBITS  18               /*  ring size, in digits  */
 #define CM_MTBITS  16               /*  hash table size  */
-#define CM_MMIN    10               /*  digits that must agree to match;
-                                        fewer than this and noise, whose
-                                        digits come from a small alphabet,
-                                        matches by accident all the time  */
+#define CM_MMIN    10               /*  minimum match, avoiding noise hits  */
 #define CM_MMAX    63               /*  match length cap  */
 #define CM_MLB     16               /*  match length buckets per stage  */
 
@@ -52,18 +49,44 @@ typedef struct {
   int live;
 } cm;
 
-/*  Build the mixer stages, histories, and weight sets.  */
+/*  Build the mixer.  */
 void cm_new(cm * c, int nst, int bits, int nsel, int lr, int lim);
 void cm_free(cm * c);
 
-/*  Name the range coder the next bits go through.  */
 static INLINE void cm_bind(cm * c, rc_enc * e, rc_dec * d) { c->e = e;  c->d = d; }
 
-/*  Code and adapt one bit. `exp` is the match prediction or -1.  */
-HOT int cm_bit(cm * c, int st, int sel, u32 h, u16 * p, u8 * cnt, int exp,
-               int bit);
+/*  Code one bit. `exp` is the match prediction or -1.  */
+typedef int (*cm_bit_fn)(cm * restrict c, int st, int sel, u32 h,
+                         u16 * restrict p, u8 * restrict cnt, int exp, int bit);
+extern cm_bit_fn cm_bit;
+HOT int cm_bit_scalar(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
+                      u8 * restrict cnt, int exp, int bit);
+#if defined(HAVE_SSE2)
+HOT int cm_bit_sse2(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
+                    u8 * restrict cnt, int exp, int bit);
+#endif
 
-/*  Return whether a predicted digit is available.  */
+/*  Tables shared by both kernels.  */
+#define CM_NI 8
+extern short cm_str16[65536];
+extern u8 cm_nex[256][4];
+extern i8 cm_nexd[256];
+extern const int cm_sqt[33];
+
+/*  Exact linear interpolation rearranged to use one multiplication.
+      SQT[i]*16*(128 - w) + SQT[i+1]*16*w + 64
+    = SQT[i]*2048 + 64 + (SQT[i+1] - SQT[i])*16*w  */
+static INLINE int cm_squash(int d) {
+  u32 u, w, i;
+  if (d > 2047) d = 2047;
+  if (d < -2047) d = -2047;
+  u = (u32) (d + 2048);
+  i = u >> 7;  w = u & 127;
+  return (int) (((u32) (cm_sqt[i] * 2048 + 64)
+                 + (u32) ((cm_sqt[i + 1] - cm_sqt[i]) * 16) * w) >> 7);
+}
+
+/*  Return the next matched digit when available.  */
 static INLINE int cm_match(const cm * c, i32 * pred) {
   if (!c->mlen) return 0;
   *pred = (i32) c->mbuf[c->mptr & (((u32) 1 << CM_MHBITS) - 1)] - 128;
