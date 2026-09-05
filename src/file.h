@@ -17,7 +17,6 @@
 #include "common.h"
 
 #define BLR_IO_CHUNK ((sz) 1 << 20)
-/* One bounded, dirty-writeback window per file. No file-sized allocation. */
 typedef struct { sz off, len; } bf_extent;
 typedef struct blr_file {
   void * handle;
@@ -35,6 +34,7 @@ blr_file * bf_open(const char * path, int write);
 blr_file * bf_stream(blr_file * parent, u32 id);
 blr_file * bf_view(blr_file * parent);
 blr_file * bf_memory(const u8 * data, sz len);
+
 void bf_extent_add(blr_file * f, sz off, sz len);
 void bf_resize(blr_file * f, sz len);
 void bf_dropcache(blr_file * f);
@@ -46,6 +46,7 @@ void bf_read(blr_file * f, sz at, void * out, sz n);
 void bf_write(blr_file * f, sz at, const void * in, sz n);
 void bf_copy(blr_file * to, blr_file * from, sz at, sz n);
 void bf_readmeta(blr_file * f, sz at, void * out, sz n);
+
 static INLINE u8 bf_get(blr_file * f, sz at) {
   FATAL_IF_HOT(at >= f->len)("file read beyond end");
   if (f->memory) return f->memory[at];
@@ -57,4 +58,5 @@ static INLINE void bf_put(blr_file * f, u8 b) {
   if (!f->live || f->len - f->at >= BLR_IO_CHUNK) bf_window(f, f->len);
   f->buf[f->used++] = b;  f->len++;  f->dirty = 1;
 }
+
 #endif
