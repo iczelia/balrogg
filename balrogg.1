@@ -17,15 +17,18 @@ balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .SH SYNOPSIS
 .B balrogg
 .RB [ \-1 .. \-9 ]
+.RB [ \-p ]
 .B e
 .I input output
 .br
 .B balrogg
+.RB [ \-p ]
 .B d
 .I input output
 .br
 .B balrogg
 .RB [ \-1 .. \-9 ]
+.RB [ \-p ]
 .RB [ \-j
 .IR N ]
 .B \-b
@@ -85,6 +88,16 @@ only the encoder's parameter search grows. The archive stores those parameters,
 so decoding runs at one speed from
 .B \-4
 .IR onward .
+Tuning evaluates the whole file. The best encoded candidate is retained
+without an additional encode pass to write the winner.
+.TP
+.BR \-p ", " \-\-progress
+Show encoding, decoding and individual Vorbis tuning progress bars on stderr.
+Progress is off by default. The final phase reaches 100 percent only after
+the output is written. Batch mode uses separate lines labeled by input file.
+.TP
+.B \-\-progress-lines
+Write progress checkpoints as separate lines, suitable for log files.
 .TP
 .BR \-b ", " \-\-batch
 Every remaining argument is an input. Encoding writes
@@ -135,6 +148,8 @@ forces the portable kernel and
 refuses to run unless the SSE2 kernel is built and the CPU supports it.
 SSE2 is the default when CPUID reports it.
 .SH LIMITS
+Input and output must be seekable.
+.PP
 Opus mode supports one mono or stereo logical stream with channel mapping
 family 0. Vorbis floor type 0 and codebook lookup type 2 are unsupported.
 Pages with bad checksums and files without a final end-of-stream page are also

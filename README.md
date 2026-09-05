@@ -13,11 +13,17 @@ issues to Kamila Szewczyk <k@iczelia.net>. The project is hosted at
 balrogg e music.ogg music.blr
 balrogg d music.blr music.ogg
 balrogg -b e *.ogg *.opus
+balrogg --progress -9 e music.ogg music.blr
 ```
 
 `e` compresses and `d` expands. balrogg detects the codec. With `-b`, every
 remaining path is processed using the available cores and memory. Encoding
 appends `.blr`; decoding removes it. Larger inputs run first.
+
+`-p` or `--progress` displays a progress bar on stderr for encoding and
+decoding, with each Vorbis tuning trial identified separately. Use
+`--progress-lines` for logs. Batch progress uses separate lines labeled with
+the input filename.
 
 ## Installation
 
@@ -47,6 +53,9 @@ and automake.
 `-1` through `-9` select effort; the default is `-9`. Through `-4`, each level
 adds a residue-model stage and affects decoding. Higher levels only expand the
 parameter search, so `-4` through `-9` decode at the same speed.
+Vorbis tuning evaluates the complete file at each selected setting. The best
+candidate is retained in the destination file, with at most the best and current
+candidate present during a trial.
 
 Results for a five-megabyte music file follow.
 
@@ -60,6 +69,9 @@ Results for a five-megabyte music file follow.
 The encoder refuses files it cannot reproduce exactly, including files with
 bad checksums, invalid page sequences, unsupported Vorbis features, or no final
 end-of-stream page.
+
+Shortened Vorbis audio packets (packet peeling) and extra padding are preserved
+verbatim when they cannot use the normal audio model.
 
 Opus support is limited to one mono or stereo logical stream with channel
 mapping family 0. Chained and multichannel Opus files are refused. Refusals
@@ -79,9 +91,9 @@ Batch mode returns the highest nonzero status reported by any file.
 
 ## Performance and portability
 
-Each file uses one thread, with its input and archive held in memory. A 5 MB
-Vorbis file uses about 40 MB at `-4` and 70 MB at `-9`. Small files are slower
-per byte because of model setup.
+Each file uses one thread and requires seekable input and output files.
+Vorbis model pages are allocated only when used, without relying on deferred
+OS allocation.
 
 Supported hosts apply a 2 GiB process memory cap to reject unreasonable
 allocations. Set `BLR_MEMCAP` to another size in MiB, or to `0` to disable the

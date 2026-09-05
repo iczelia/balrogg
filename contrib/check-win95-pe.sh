@@ -68,6 +68,7 @@ GetCommandLineA GetEnvironmentVariableA GetExitCodeProcess
 GetFileAttributesA GetFileInformationByHandle GetFileSize GetLastError
 GetModuleFileNameA GetProcessHeap GetStdHandle GetSystemInfo
 GlobalMemoryStatus HeapAlloc HeapFree HeapReAlloc ReadFile
+SetEndOfFile SetFilePointer SetLastError
 WaitForMultipleObjects WriteFile '
 for sym in `awk '$2 == "<none>" {print $4}' "$tmp.k32"`; do
   found=no
