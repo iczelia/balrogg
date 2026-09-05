@@ -921,10 +921,12 @@ opus_int32 om_op(oprec * op) {
 #define K_FSLACK  ((okey) 0x1E000000UL << 32)
 #define K_FBYTE   ((okey) 0x1F000000UL << 32)
 
-/*  Refuse header packets that would overflow the 4096-wide model.  */
-#define OC_BLOBMAX  4096
-/*  Likewise the packet-header length model is 16-wide.  */
-#define OC_HDRMAX   16
+/* RFC 7845 section 6 requires support through this audio packet size.
+   Keep scratch bounded; header packets currently share the same limit. */
+#define OPUS_MAXPKT 61440
+/* The last model symbol escapes to a longer length without widening models. */
+#define OC_BLOBESC 4095
+#define OC_HDRESC  15
 
 typedef struct {
   u8 prev_hdr[8];
@@ -1002,9 +1004,14 @@ static void resid(okey base, opus_int64 * v) {
 }
 
 static void oc_packet_hdr(oc_state * s, int * nhdr, u8 * hdr, int * len) {
-  int i, v = *nhdr;
+  int i, v = MIN(*nhdr, OC_HDRESC);
   opus_int64 d;
   om_int(K_NHDR | (okey) (s->prev_nhdr & 15), 16, 192, 28, 16384, &v);
+  if (v == OC_HDRESC) {
+    u32 extra = om_mode == OM_DEC ? 0 : (u32) (*nhdr - OC_HDRESC);
+    om_uni(&extra, OPUS_MAXPKT - OC_HDRESC + 1);
+    v += (int) extra;
+  }
   *nhdr = v;  s->prev_nhdr = v;
   Fi(*nhdr,
     int b = (om_mode == OM_DEC) ? 0 : hdr[i];
@@ -1032,8 +1039,13 @@ static void oc_packet_trailer(int n, u8 * t) {
 
 /*  Code OpusHead and OpusTags whole.  */
 static void oc_blob(u8 * b, int * n) {
-  int i, v = *n;
+  int i, v = MIN(*n, OC_BLOBESC);
   om_int(K_RAW, 4096, 192, 28, 16384, &v);
+  if (v == OC_BLOBESC) {
+    u32 extra = om_mode == OM_DEC ? 0 : (u32) (*n - OC_BLOBESC);
+    om_uni(&extra, OPUS_MAXPKT - OC_BLOBESC + 1);
+    v += (int) extra;
+  }
   *n = v;
   Fi(*n,
     int x = (om_mode == OM_DEC) ? 0 : b[i];
@@ -1078,7 +1090,6 @@ static void oc_page(oc_state * s, oc_pagehdr * p) {
 }
 
 /*  Ogg framing over lacing values and packet boundaries.  */
-#define OPUS_MAXPKT (48 * 1275 + 64)  /*  48 frames of the largest legal size  */
 
 typedef struct { sz off, end;  int len; } opkt;
 typedef struct { int htype, nsegs; u32 seqno; opus_uint64 granule; } opage;
@@ -1272,12 +1283,6 @@ int opus_pack(const char * in, const char * out, int lev) {
             in, s.npk, s.npg, 1L << 24);
     goto done;
   }
-  Fi(2,
-    if (s.pk[i].len >= OC_BLOBMAX) {
-      fprintf(stderr, "balrogg: %s header packet %d is %d bytes, limit %d\n",
-              in, i, s.pk[i].len, OC_BLOBMAX - 1);
-      goto done;
-    });
 
   output = bf_open(out, 1); arc_begin(&a, output);
   orc_enc_init(&e, arc_newstream(&a));
@@ -1307,9 +1312,9 @@ int opus_pack(const char * in, const char * out, int lev) {
     packet_read(input, s.pk + i, packet);
     nf = opus_packet_parse(packet, L, &toc, frames, sizes, &poff);
     if (nf < 0) { fprintf(stderr, "balrogg: %s packet %d parse failed (%d)\n", in, i, nf);  goto done; }
-    if (poff < 1 || poff >= OC_HDRMAX) {
+    if (poff < 1 || poff > L) {
       fprintf(stderr, "balrogg: %s packet %d header is %d bytes, limit %d\n",
-              in, i, poff, OC_HDRMAX - 1);
+              in, i, poff, L);
       goto done;
     }
     Fj(nf, sum += sizes[j]);
@@ -1405,19 +1410,17 @@ int opus_unpack(const char * in, const char * out) {
   if (!dec) { fprintf(stderr, "balrogg: %s cannot create Opus decoder\n", in);  goto done; }
 
   for (i = 2; i < s.npk; i++) {
-    u8 hdr[OC_HDRMAX];
     unsigned char toc;
     const unsigned char * frames[48];
     opus_int16 sizes[48];
     int nhdr = 0, L = 0, nf, j, sum = 0, poff = 0;
-    oc_packet_hdr(&cs, &nhdr, hdr, &L);
-    if (L < 1 || L > OPUS_MAXPKT || nhdr < 1 || nhdr >= OC_HDRMAX) {
+    oc_packet_hdr(&cs, &nhdr, packet, &L);
+    if (L < 1 || L > OPUS_MAXPKT || nhdr < 1 || nhdr > L) {
       fprintf(stderr, "balrogg: %s packet %d has header %d and length %d\n",
               in, i, nhdr, L);
       goto done;
     }
-    memset(packet, 0, (sz) L);
-    memcpy(packet, hdr, (sz) (nhdr < L ? nhdr : L));
+    memset(packet + nhdr, 0, (sz) (L - nhdr));
     nf = opus_packet_parse(packet, L, &toc, frames, sizes, &poff);
     if (nf < 0 || poff != nhdr) {
       fprintf(stderr, "balrogg: %s packet %d header mismatch "

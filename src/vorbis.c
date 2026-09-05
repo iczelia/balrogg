@@ -238,7 +238,7 @@ static const u8 RST[] = {
 typedef struct {
   int enc;
   int replay; sz symbol;
-  int probe, shortpkt;        /*  syntax-only traversal, without model updates  */
+  int probe, rawpkt;          /*  syntax-only traversal; packet needs verbatim coding  */
   rc_enc * e[3];
   rc_dec * d[3];
   vb_ctx * v;
@@ -259,7 +259,7 @@ static u32 bget(io * z, int n) {
   u32 r = 0;
   int i;
   if (z->probe && z->pos + (sz) n > z->len * 8) {
-    z->shortpkt = 1;  return 0;
+    z->rawpkt = 1;  return 0;
   }
   FATAL_IF_HOT(z->pos + (sz) n > z->len * 8)("vorbis: packet ends inside a field");
   for (i = 0; i < n; i++, z->pos++)
@@ -842,7 +842,7 @@ static void hdr(io * z, int which) {
 static void ioinit(io * z, vb_ctx * v, int enc, u8 * pkt, sz len) {
   sz i;
   z->enc = enc;  z->v = v;  z->b = pkt;  z->len = len;  z->pos = 0;
-  z->probe = z->shortpkt = z->replay = 0; z->symbol = 0;
+  z->probe = z->rawpkt = z->replay = 0; z->symbol = 0;
   Fi(3, z->e[i] = NULL;  z->d[i] = NULL);
 }
 
@@ -995,7 +995,7 @@ static u32 bk_get(io * z, vb_book * b) {
   }
   for (;;) {
     if (z->probe && z->pos >= z->len * 8) {
-      z->shortpkt = 1; return 0;
+      z->rawpkt = 1; return 0;
     }
     t = b->nd[2 * idx + bget1(z)];
     FATAL_IF_HOT(t == 0)("vorbis: the packet holds no such codeword");
@@ -1068,28 +1068,33 @@ static int fl_get(io * z, vb_floor * f, u32 * y) {
   if (!bget(z, 1)) return 0;
   p = blr_ilog(f->quant - 1);
   y[0] = bget(z, p);  y[1] = bget(z, p);
-  if (z->shortpkt) return 0;
+  if (z->rawpkt) return 0;
   Fi(f->parts,
     u32 c = f->pcls[i], cv0;
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) cv = bk_get(z, s->bk + f->cbook[c]);
-    if (z->shortpkt) return 0;
+    if (z->rawpkt) return 0;
     cv0 = cv;
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
       y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
-      if (z->shortpkt) return 0);
-    /*  Recreate libvorbis's first matching subclass choice exactly.  */
-    FATAL_UNLESS(!(cv0 >> (cs * cd)),
-                 "vorbis: floor class codeword exceeds its dimension");
+      if (z->rawpkt) return 0);
+    /* The value model reconstructs libvorbis's first matching subclass.
+       Other choices and unused high class bits are legal Vorbis; preserve
+       those packets verbatim before changing any adaptive state. */
+    if (cv0 >> (cs * cd)) {
+      FATAL_UNLESS(z->probe, "internal: unmodeled floor class codeword");
+      z->rawpkt = 1; return 0;
+    }
     Fk(cd,
       u32 l, d = (cv0 >> (k * cs)) & ((1UL << cs) - 1);
       for (l = 0; l < d; l++) {
         u32 mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
-        FATAL_UNLESS(y[j + k] >= mx,
-                     "vorbis: floor value uses a later subclass book than "
-                     "the first that fits");
+        if (y[j + k] < mx) {
+          FATAL_UNLESS(z->probe, "internal: unmodeled floor subclass choice");
+          z->rawpkt = 1; return 0;
+        }
       });
     j += cd);
   return 1;
@@ -1367,9 +1372,9 @@ static HOT FLATTEN void rs_part(io * z, vb_res * r, vb_book * b, u32 q,
       ("vorbis: residue 0 partition %lu not divisible by %lu",
        (unsigned long) r->psz, (unsigned long) b->dim);
     Fi(st, rs_sym(z, b, q, pass, g + i, st, il);
-           if (z->shortpkt) return);
+           if (z->rawpkt) return);
   } else
-    for (i = 0; i < r->psz && !z->shortpkt; i += b->dim)
+    for (i = 0; i < r->psz && !z->rawpkt; i += b->dim)
       rs_sym(z, b, q, pass, g + i, 1, il);
 }
 
@@ -1398,7 +1403,7 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
         Fj(vch,
           if (z->enc) {
             cw = bk_get(z, cb);
-            if (z->shortpkt) return;
+            if (z->rawpkt) return;
             for (k = pv; k > 0; k--) { cl[j * w + pc + k - 1] = cw % r->ncl;
                                        cw /= r->ncl; }
             /*  Refuse unused digits that would change the rebuilt codeword.  */
@@ -1423,7 +1428,7 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
           PROF(prof_rcls = cl[j * w + pc];  prof_rpart = pc);
           if (bn >= 0)
             rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il);
-          if (z->shortpkt) return);
+          if (z->rawpkt) return);
         pc++);
     }
   }
@@ -1451,7 +1456,7 @@ static void payload(io * z, u32 mode) {
     int u = 0;
     PROF(prof_ch = k);
     if (z->enc) u = fl_get(z, f, yc);
-    if (z->shortpkt) return;
+    if (z->rawpkt) return;
     if (z->probe) { nz[k] = (u8) u;  continue; }
     PROF(prof_site = P_USED);
     u = abit(z, atab(v, A_USED, v->hu), v->t.alim, u);
@@ -1468,7 +1473,7 @@ static void payload(io * z, u32 mode) {
     m = 0;
     Fj(ch, if (mp->mux[j] == i) sub[m++] = nz[j]);
     if (m) residue(z, mp->rs[i], sub, m, n);
-    if (z->shortpkt) return);
+    if (z->rawpkt) return);
 }
 
 /*  Vorbis permits packet peeling and arbitrary tail padding. Probe the syntax
@@ -1483,9 +1488,9 @@ static int audio_verbatim(io * z) {
   md = bget(&p, (int) blr_ilog(z->v->cur->nmd - 1));
   FATAL_UNLESS(md < z->v->cur->nmd, "vorbis: invalid audio mode");
   if (z->v->cur->blockflag[md]) bget(&p, 2);
-  if (p.shortpkt) return 1;
+  if (p.rawpkt) return 1;
   payload(&p, md);
-  if (p.shortpkt || p.len * 8 - p.pos >= 8) return 1;
+  if (p.rawpkt || p.len * 8 - p.pos >= 8) return 1;
   return bget(&p, (int) (p.len * 8 - p.pos)) != 0;
 }
 

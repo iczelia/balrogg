@@ -61,7 +61,12 @@ void xt_init(void) {
 }
 
 int xt_open_report(const char * path) {
+#ifdef BLR_DOS
+  /* The guest has no visible console. Keep fatal library diagnostics too. */
+  report = freopen(path, "w", stderr);
+#else
   report = fopen(path, "w");
+#endif
   return report != NULL;
 }
 
@@ -92,7 +97,7 @@ void xt_report(int ok, const char * fmt, ...) {
   fprintf(stderr, "FAIL [%s] ", xt_section);
   va_start(ap, fmt);  vfprintf(stderr, fmt, ap);  va_end(ap);
   fputc('\n', stderr);
-  if (report) {
+  if (report && report != stderr) {
     fprintf(report, "FAIL [%s] ", xt_section);
     va_start(ap, fmt);  vfprintf(report, fmt, ap);  va_end(ap);
     fputc('\n', report);  fflush(report);
@@ -102,7 +107,7 @@ void xt_report(int ok, const char * fmt, ...) {
 int xt_finish(const char * program) {
   fprintf(stderr, "%s: %lu checks, %lu failed\n", program, xt_checks,
           xt_failures);
-  if (report)
+  if (report && report != stderr)
     fprintf(report, "%s: %lu checks, %lu failed\n", program, xt_checks,
             xt_failures);
   xt_close_report();
@@ -241,9 +246,12 @@ const char * xt_tmp(const char * tag) {
 #if defined(BLR_DOS)
   {
     char dos[32];
+    const char * ext;
     xt_dos_name(tag, dos, sizeof dos);
-    FATAL_UNLESS(strlen(dos) + 2 <= 12, "t_suite: scratch tag %s is not 8.3", tag);
-    snprintf(buf[used], sizeof buf[used], "ts%s", dos);
+    ext = strrchr(dos, '.');
+    /* Reserve the prefix inside the eight-character stem. The slot keeps
+       different tags distinct even when their shortened 8.3 names collide. */
+    snprintf(buf[used], sizeof buf[used], "ts%02d%s", used, ext ? ext : "");
   }
 #else
   snprintf(buf[used], sizeof buf[used], "t_suite-%s.tmp", tag);
