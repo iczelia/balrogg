@@ -3,6 +3,8 @@
 balrogg losslessly recompresses Ogg Vorbis and Opus files. Archives are
 typically 8-12% smaller than `.ogg` files and 3-8% smaller than `.opus` files.
 
+Releases are not backwards or forwards compatible until v2.0 is reached.
+
 balrogg is licensed under GNU GPL version 3. See [COPYING](COPYING). Report
 issues to Kamila Szewczyk <k@iczelia.net>. The project is hosted at
 <https://github.com/iczelia/balrogg>.
