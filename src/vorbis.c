@@ -67,7 +67,8 @@ static const mdl_cfg CFG[M_N] = {
   {   5,     1,  1,    32,    0,   1 },  /*  float mantissa  */
   {   4,     1,  1,    2,     0,   1 },  /*  float exponent, minimum  */
   {   4,     1,  1,    2,     0,   1 },  /*  float exponent, delta  */
-  {   5,     1,  1,    8,     0,   0 }   /*  wide multiplicand  */
+  {   5,     1,  1,    8,     0,   0 },  /*  wide multiplicand  */
+  {   5,     1,  1,   32,     0,   1 }   /*  floor classword correction  */
 };
 
 void vb_init(vb_ctx * v) {
@@ -80,7 +81,7 @@ void vb_init(vb_ctx * v) {
   memset(v->awc, 0, sizeof v->awc);
   rc_probs_init(v->cmt, VB_CBANK * VB_CSIZE);
   v->pb = 0;  memset(&v->i, 0, sizeof v->i);
-  /*  Packet type is always zero, so reuse the M_CH shape.  */
+  /*  Ordinary packets use type zero; other values describe extra syntax.  */
   rc_probs_init(v->am, VB_MBANK * VB_MSTEP);
   rc_probs_init(&v->aw[0][0], 4);
   mdl_init(&v->apt, CFG + M_CH);
@@ -238,7 +239,7 @@ static const u8 RST[] = {
 typedef struct {
   int enc;
   int replay; sz symbol;
-  int probe, rawpkt;          /*  syntax-only traversal; packet needs verbatim coding  */
+  int probe, rawpkt, choices; /*  syntax-only traversal, peeling, floor choices  */
   rc_enc * e[3];
   rc_dec * d[3];
   vb_ctx * v;
@@ -842,7 +843,7 @@ static void hdr(io * z, int which) {
 static void ioinit(io * z, vb_ctx * v, int enc, u8 * pkt, sz len) {
   sz i;
   z->enc = enc;  z->v = v;  z->b = pkt;  z->len = len;  z->pos = 0;
-  z->probe = z->rawpkt = z->replay = 0; z->symbol = 0;
+  z->probe = z->rawpkt = z->replay = z->choices = 0; z->symbol = 0;
   Fi(3, z->e[i] = NULL;  z->d[i] = NULL);
 }
 
@@ -1062,7 +1063,7 @@ static u32 fl_val(io * z, u32 f, u32 i, u8 * h, u32 v) {
   return r;
 }
 
-static int fl_get(io * z, vb_floor * f, u32 * y) {
+static int fl_get(io * z, vb_floor * f, u32 * y, u32 * classes) {
   vb_setup * s = z->v->cur;
   u32 i, k, j = 2, p, cd, cs, cv;
   if (!bget(z, 1)) return 0;
@@ -1074,27 +1075,19 @@ static int fl_get(io * z, vb_floor * f, u32 * y) {
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) cv = bk_get(z, s->bk + f->cbook[c]);
     if (z->rawpkt) return 0;
-    cv0 = cv;
+    classes[i] = cv0 = cv;
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
       y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
       if (z->rawpkt) return 0);
-    /* The value model reconstructs libvorbis's first matching subclass.
-       Other choices and unused high class bits are legal Vorbis; preserve
-       those packets verbatim before changing any adaptive state. */
-    if (cv0 >> (cs * cd)) {
-      FATAL_UNLESS(z->probe, "internal: unmodeled floor class codeword");
-      z->rawpkt = 1; return 0;
-    }
+    /* Record whether the value model needs a classword correction. */
+    if (cv0 >> (cs * cd)) z->choices = 1;
     Fk(cd,
       u32 l, d = (cv0 >> (k * cs)) & ((1UL << cs) - 1);
       for (l = 0; l < d; l++) {
         u32 mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
-        if (y[j + k] < mx) {
-          FATAL_UNLESS(z->probe, "internal: unmodeled floor subclass choice");
-          z->rawpkt = 1; return 0;
-        }
+        if (y[j + k] < mx) z->choices = 1;
       });
     j += cd);
   return 1;
@@ -1102,15 +1095,16 @@ static int fl_get(io * z, vb_floor * f, u32 * y) {
 
 /*  Select the first subclass book that can represent the value. An absent book
     represents zero.  */
-static void fl_put(io * z, vb_floor * f, const u32 * y, int used) {
+static void fl_put(io * z, vb_floor * f, const u32 * y, int used,
+                    const u32 * classes) {
   vb_setup * s = z->v->cur;
   u32 i, k, l, j = 2, p, cd, cs, cv, mx;
-  bput(z, 1, (u32) used);
+  if (!z->enc) bput(z, 1, (u32) used);
   if (!used) return;
   p = blr_ilog(f->quant - 1);
   FATAL_UNLESS(y[0] < (1UL << p) && y[1] < (1UL << p),
                "vorbis: floor post does not fit %lu bits", (unsigned long) p);
-  bput(z, p, y[0]);  bput(z, p, y[1]);
+  if (!z->enc) { bput(z, p, y[0]); bput(z, p, y[1]); }
   Fi(f->parts,
     u32 c = f->pcls[i];
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
@@ -1123,12 +1117,14 @@ static void fl_put(io * z, vb_floor * f, const u32 * y, int used) {
         FATAL_UNLESS(l < (1UL << cs), "vorbis: no class %lu book fits value %lu",
                      (unsigned long) c, (unsigned long) y[j + k]);
         cv |= l << (k * cs));
-      bk_put(z, s->bk + f->cbook[c], cv);
+      if (z->choices)
+        cv = mv(z, S_BULK, M_FCLASS, z->enc ? classes[i] : 0, cv);
+      if (!z->enc) bk_put(z, s->bk + f->cbook[c], cv);
     }
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      if (b >= 0) bk_put(z, s->bk + b, y[j + k]));
+      if (!z->enc && b >= 0) bk_put(z, s->bk + b, y[j + k]));
     j += cd);
 }
 
@@ -1451,11 +1447,11 @@ static void payload(io * z, u32 mode) {
   Fk(ch,
     u32 fno = mp->fl[mp->mux[k]];
     vb_floor * f = s->fl + fno;
-    u32 * yc = y + k * VB_MAXPOST;
+    u32 * yc = y + k * VB_MAXPOST, classes[VB_MAXPART];
     u8 h = 0;
     int u = 0;
     PROF(prof_ch = k);
-    if (z->enc) u = fl_get(z, f, yc);
+    if (z->enc) u = fl_get(z, f, yc, classes);
     if (z->rawpkt) return;
     if (z->probe) { nz[k] = (u8) u;  continue; }
     PROF(prof_site = P_USED);
@@ -1466,7 +1462,7 @@ static void payload(io * z, u32 mode) {
     if (u)
       Fi(f->posts, u32 p = f->srt[i];
                      yc[p] = fl_val(z, fno, p, &h, z->enc ? yc[p] : 0));
-    if (!z->enc) fl_put(z, f, yc, u));
+    if (!z->enc || z->choices) fl_put(z, f, yc, u, classes));
   Fi(mp->nstep, if (nz[mp->mag[i]] || nz[mp->ang[i]])
                   nz[mp->mag[i]] = nz[mp->ang[i]] = 1);
   Fi(mp->sub,
@@ -1476,10 +1472,9 @@ static void payload(io * z, u32 mode) {
     if (z->rawpkt) return);
 }
 
-/*  Vorbis permits packet peeling and arbitrary tail padding. Probe the syntax
-    before touching adaptive state; exceptional packets are stored verbatim.
-    The scratch arrays may change, but no coding model or history may change.  */
-static int audio_verbatim(io * z) {
+/* Probe without changing coding models. Type 1 uses the byte model for a
+   peeled packet; bit 1 adds floor class corrections and bit 2 codes a tail. */
+static int audio_type(io * z) {
   io p = *z;
   u32 md;
   p.probe = 1; z->v->nsymbols = 0; z->v->symfull = 0;
@@ -1490,46 +1485,50 @@ static int audio_verbatim(io * z) {
   if (z->v->cur->blockflag[md]) bget(&p, 2);
   if (p.rawpkt) return 1;
   payload(&p, md);
-  if (p.rawpkt || p.len * 8 - p.pos >= 8) return 1;
-  return bget(&p, (int) (p.len * 8 - p.pos)) != 0;
+  if (p.rawpkt) return 1;
+  return (p.choices ? 2 : 0) |
+    ((p.len * 8 - p.pos >= 8 || bget(&p, (int) (p.len * 8 - p.pos))) ? 4 : 0);
 }
 
-static sz raw_audio(io * z) {
-  sz i;
-  int k;
-  Fi(z->len,
-    u32 b = z->enc ? z->b[i] : 0;
-    for (k = 0; k < 8; k++) {
-      if (z->enc) rc_enc_bit_raw(z->e[S_BULK], RC_PINIT, (b >> k) & 1);
-      else b |= (u32) rc_dec_bit_raw(z->d[S_BULK], RC_PINIT) << k;
-    }
-    if (!z->enc) z->b[i] = (u8) b);
-  FATAL_UNLESS(z->len && !(z->b[0] & 1), "vorbis: invalid verbatim audio packet");
-  return z->len * 8;
+/* Model exceptional bytes and padding using the existing small byte-context
+   bank. Code from the current bit position, including a final partial byte. */
+static sz packet_tail(io * z) {
+  u32 prev = 0;
+  while (z->pos < z->len * 8) {
+    int n = (int) MIN((sz) 8, z->len * 8 - z->pos), k;
+    u32 val = z->enc ? bget(z, n) : 0, idx = 1;
+    u32 bank = MIN(prev >> 4, VB_CBANK - 1) * VB_CSIZE;
+    for (k = n - 1; k >= 0; k--)
+      idx = idx * 2 + (u32) cbit(z, S_BULK, z->v->cmt + bank + idx,
+                                 z->v->cmtc + bank + idx, (val >> k) & 1);
+    prev = idx - (1U << n);
+    if (!z->enc) bput(z, n, prev);
+  }
+  return z->pos;
 }
 
 static sz audio(io * z, int cont) {
   vb_ctx * v = z->v;
-  u32 md, bank;
+  u32 md, bank, type;
   int d, w[2], i;
 
   FATAL_UNLESS(v->cur && v->cur->nmd > 0, "vorbis: audio before setup");
   d = (int) blr_ilog(v->cur->nmd - 1);
   PROF(prof_pkt++);
-  /*  Type 1 stores a verbatim packet; type 0 uses the audio model.  */
+  type = z->enc ? (u32) audio_type(z) : mdl_dec(&v->apt, z->d[S_TYPE]);
+  FATAL_UNLESS(type <= 6 && type != 3 && type != 5,
+               "vorbis: invalid audio packet type");
+  if (z->enc) mdl_enc(&v->apt, z->e[S_TYPE], type);
+  if (type == 1) {
+    sz bits = packet_tail(z);
+    FATAL_UNLESS(z->len && !(z->b[0] & 1), "vorbis: invalid peeled audio packet");
+    return bits;
+  }
+  z->choices = (type & 2) != 0;
   if (z->enc) {
-    int raw = audio_verbatim(z);
-    mdl_enc(&v->apt, z->e[S_TYPE], (u32) raw);
-    if (raw) return raw_audio(z);
     z->replay = !v->symfull;
     FATAL_UNLESS(bget(z, 1) == 0, "vorbis: header on audio path");
-  } else {
-    u32 type = mdl_dec(&v->apt, z->d[S_TYPE]);
-    FATAL_UNLESS(type <= 1,
-                 "vorbis: invalid audio packet type");
-    if (type) return raw_audio(z);
-    bput(z, 1, 0);
-  }
+  } else bput(z, 1, 0);
   arena(v);
   cm_bind(&v->cm, z->e[S_BULK], z->d[S_BULK]);
 
@@ -1554,6 +1553,7 @@ static sz audio(io * z, int cont) {
   payload(z, md);
   FATAL_IF_HOT(z->replay && z->symbol != v->nsymbols)
     ("internal: Vorbis symbol replay mismatch");
+  if (type & 4) return packet_tail(z);
   /*  Only byte-alignment padding may remain.  */
   FATAL_UNLESS(z->len * 8 - z->pos < 8, "vorbis: %lu unparsed audio bits",
                (unsigned long) (z->len * 8 - z->pos));

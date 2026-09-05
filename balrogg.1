@@ -151,7 +151,8 @@ SSE2 is the default when CPUID reports it.
 Input and output must be seekable.
 .PP
 Opus mode supports one mono or stereo logical stream with channel mapping
-family 0. Vorbis floor type 0 and codebook lookup type 2 are unsupported.
+family 0, with packets (including headers) up to 61,440 bytes.
+Vorbis floor type 0 and codebook lookup type 2 are unsupported.
 Pages with bad checksums and files without a final end-of-stream page are also
 refused.
 .SH EXAMPLES

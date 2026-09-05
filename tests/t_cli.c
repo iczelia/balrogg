@@ -300,7 +300,7 @@ static void t_archive_version(void) {
   const char * arc = xt_tmp("cli.blr"), * bad = xt_tmp("cli2.blr");
   const char * out = xt_tmp("cli.out"), * log = xt_tmp("cli.log");
   char args[8192];
-  static const int versions[] = { 0, 1, 2, ARC_VER + 1, 255 };
+  static const int versions[] = { ARC_VER - 1, ARC_VER + 1, 255 };
   int codec, v, j;
   xt_section_begin("archive version gate");
   for (codec = 0; codec <= has_opus; codec++) {
@@ -533,6 +533,110 @@ static void t_constructed(void) {
   xt_unlink(log);  xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
 }
 
+/* Valid encoder choices outside the original model alphabets. Long Vorbis
+   runs check compression; changed Opus packets precede ordinary packets. */
+static void t_codec_choices(void) {
+  static const char * const floors[] = { "flooralt.ogg", "floorhi.ogg" };
+  const char * input = xt_tmp("edges.ogg"), * arc = xt_tmp("edges.blr");
+  const char * out = xt_tmp("edges.out"), * log = xt_tmp("edges.log");
+  char args[8192];
+  int variant, lev;
+  xt_section_begin("valid codec choices");
+  for (variant = -1; variant < (has_opus ? 9 : 2); variant++) {
+    if (variant < 2) {
+      sz n, at = 0, got;
+      u8 * b = slurp(xt_fixture(xt_data, floors[variant < 0 ? 0 : variant]), &n);
+      obuf o = { NULL, 0, 0 };
+      ogg_page p;
+      while ((got = ogg_parse(&p, b + at, n - at)) != 0) {
+        const u8 * src = b + at + OGG_HDRMIN + p.nseg;
+        if (p.type & 4) {
+          u8 body[600], packet[3];
+          int i, j;
+          CHECK(p.plen[0] == sizeof packet, "three-byte floor fixture");
+          memcpy(packet, src, sizeof packet);
+          if (variant < 0) packet[2] &= (u8) ~12; /* canonical master symbol */
+          for (i = 0; i < 200; i++) memcpy(body + 3 * i, packet, 3);
+          p.np = 200;
+          for (i = 0; i < p.np; i++) p.plen[i] = 3;
+          for (j = 0; j < 100; j++) {
+            p.seq = (u32) j + 2; p.type = j == 99 ? 4 : 0;
+            p.glo = (u32) (j + 1) * 6400 - 32; p.ghi = 0;
+            ob_page(&o, &p, body);
+          }
+        } else ob_page(&o, &p, src);
+        at += got; if (at == n) break;
+      }
+      spew(input, o.b, o.n); free(o.b); free(b);
+    } else {
+      sz len, at = 0, got;
+      u8 * b = slurp(xt_fixture(xt_data, "celt_st_128k.opus"), &len);
+      u8 * body = xmalloc(2 * 65025), * pad = xmalloc(61440);
+      obuf o = { NULL, 0, 0 };
+      ogg_page p;
+      u32 seq = 0;
+      int changed = 0;
+      while ((got = ogg_parse(&p, b + at, len - at)) != 0) {
+        const u8 * src = b + at + OGG_HDRMIN + p.nseg;
+        if (variant < 5 && p.seq == 1) {
+          sz n = variant == 2 ? 4095 : variant == 3 ? 4096 : 7062;
+          CHECK(p.np == 1 && p.blen < n, "OpusTags fixture fits padding");
+          memcpy(body, src, p.blen); memset(body + p.blen, 0, n - p.blen);
+          p.plen[0] = (u32) n; src = body; changed = 1;
+        } else if (variant >= 5 && p.seq == 2) {
+          sz old = p.plen[0], n, extra, nhdr = 2, i;
+          /* One frame, followed by RFC 6716 code-3 padding. Each 255 in
+             the padding length contributes 254 trailing padding bytes. */
+          CHECK(p.np > 1 && (src[0] & 3) == 0, "single-frame Opus fixture");
+          n = variant == 8 ? 61440 : old + 2 + (sz) (variant + 6) * 255;
+          extra = n - old - 2;
+          pad[0] = src[0] | 3; pad[1] = 0x41;
+          for (i = 0; i < extra / 255; i++) pad[nhdr++] = 255;
+          pad[nhdr++] = (u8) (extra % 255);
+          memcpy(pad + nhdr, src + 1, old - 1);
+          memset(pad + nhdr + old - 1, 0, n - nhdr - old + 1);
+          if (variant == 8) {
+            ogg_page first = p;
+            first.type = 0; first.np = 1; first.plen[0] = (u32) n;
+            first.tail = 0; first.glo = 960; first.ghi = 0; first.seq = seq++;
+            ob_page(&o, &first, pad);
+            for (i = 1; i < (sz) p.np; i++) p.plen[i - 1] = p.plen[i];
+            p.np--; src += old;
+          } else {
+            memcpy(body, pad, n); memcpy(body + n, src + old, p.blen - old);
+            p.plen[0] = (u32) n; src = body;
+          }
+          changed = 1;
+        }
+        p.seq = seq++; ob_page(&o, &p, src); at += got;
+        if (at == len) break;
+      }
+      CHECK(changed && at == len, "Opus variant %d constructed", variant);
+      spew(input, o.b, o.n); free(o.b); free(body); free(pad); free(b);
+    }
+    for (lev = 1; lev <= 9; lev += 8) {
+      int ok;
+      sprintf(args, "-%d e \"%s\" \"%s\"", lev, input, arc);
+      ok = xt_run(args, log) == 0;
+      CHECK(ok, "valid codec variant %d encodes at -%d", variant, lev);
+      if (!ok) continue;
+      if (variant < 2) {
+        static long canonical[2];
+        long size = xt_file_size(arc);
+        if (variant < 0) canonical[lev == 9] = size;
+        else CHECK(size <= canonical[lev == 9] + 128,
+                   "floor variant %d retains canonical compression at -%d", variant, lev);
+        CHECK(size < xt_file_size(input) / 20,
+              "floor variant %d compresses repeated exceptional packets at -%d", variant, lev);
+      }
+      sprintf(args, "d \"%s\" \"%s\"", arc, out);
+      CHECK(xt_run(args, log) == 0 && xt_same_file(input, out),
+            "valid codec variant %d is lossless at -%d", variant, lev);
+    }
+  }
+  xt_unlink(input); xt_unlink(arc); xt_unlink(out); xt_unlink(log);
+}
+
 void xt_run_cli(void) {
   if (!xt_binary || !xt_data) {
     xt_section_begin("cli");
@@ -548,4 +652,5 @@ void xt_run_cli(void) {
   t_packet_edges();
   t_progress();
   t_archive_version();
+  t_codec_choices();
 }

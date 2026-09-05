@@ -25,7 +25,7 @@
 #define ARC_MAGIC     "BALROGG"
 #define ARC_MAGLEN    (sizeof ARC_MAGIC - 1)
 #define ARC_HDRLEN    (ARC_MAGLEN + 2)
-#define ARC_VER       3             /*  interleaved bounded chunks  */
+#define ARC_VER       1             /*  modeled exceptional codec syntax  */
 #define ARC_TUNEMAX   8
 
 /*  Flags hold pool size in bits 0 through 2, solid mode in bit 3, Opus mode in

@@ -37,7 +37,7 @@ enum {
   M_NMAP, M_SUBM, M_CSTEP, M_MAGANG, M_MUX, M_SMT, M_SMF, M_SMR,
   M_NMODE, M_MDMAP, M_FMANT, M_FEXP0, M_FEXP1,
   /*  Alternate model for multiplicands wider than their lookup table.  */
-  M_MULTW, M_N
+  M_MULTW, M_FCLASS, M_N
 };
 
 /*  Bit-tree slots.  Each name is the tree's root; a tree of depth d owns

@@ -70,11 +70,14 @@ The encoder refuses files it cannot reproduce exactly, including files with
 bad checksums, invalid page sequences, unsupported Vorbis features, or no final
 end-of-stream page.
 
-Shortened Vorbis audio packets (packet peeling) and extra padding are preserved
-verbatim when they cannot use the normal audio model.
+Vorbis packets with extra padding or alternative floor subclass choices retain
+normal floor and residue compression. Classword corrections and padding are
+modeled separately. Shortened packets (packet peeling) use an adaptive byte model.
 
 Opus support is limited to one mono or stereo logical stream with channel
-mapping family 0. Chained and multichannel Opus files are refused. Refusals
+mapping family 0. Packets, including OpusHead and OpusTags, are limited to 61,440
+bytes; extended frame headers and padding are supported within that limit.
+Chained and multichannel Opus files are refused. Refusals
 produce a diagnostic and exit status 1.
 
 ## Exit status
