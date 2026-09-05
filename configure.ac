@@ -13,7 +13,7 @@ dnl  You should have received a copy of the GNU General Public License
 dnl  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 m4_define([balrogg_version_major], [1])
-m4_define([balrogg_version_minor], [0])
+m4_define([balrogg_version_minor], [1])
 m4_define([balrogg_version], [balrogg_version_major.balrogg_version_minor])
 
 AC_PREREQ([2.69])
