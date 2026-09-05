@@ -43,6 +43,9 @@ void ogg_crc_set(u8 * p, sz n);
 /*  Parse the page starting at b; returns its total size, or 0 if b does not
     begin a complete, well-formed page.  Does not check the CRC.  */
 sz ogg_parse(ogg_page * p, const u8 * b, sz n);
+/* Read one page without prefetching following pages. Image has room for the
+   maximum header, lacing table and body (65307 bytes). */
+sz ogg_read(blr_file * file, sz off, ogg_page * p, u8 * image);
 /*  Serialize a header and payload with a computed CRC.  */
 sz ogg_emit(const ogg_page * p, u8 * out, const u8 * body);
 

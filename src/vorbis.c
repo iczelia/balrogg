@@ -16,6 +16,7 @@
 #include "prof.h"
 
 static void cm_alloc(vb_ctx * v);
+static void ar_clear(vb_ctx * v, sz at, sz n);
 
 /*  Value models.  An asterisk marks a field configured like its neighbour
     rather than on its own.  A plus marks depths raised to cover the field's
@@ -88,13 +89,14 @@ void vb_init(vb_ctx * v) {
   v->su = NULL;  v->nsu = v->csu = 0;  v->cur = NULL;
   memset(v->sl, 0, sizeof v->sl);  memset(v->st, 0, sizeof v->st);
   v->nsl = 0;  v->ns = VB_NSLOT;
-  v->ar = NULL;  v->arn = 0;  v->mem = NULL;  v->ac = NULL;  v->acz = 0;
+  v->ar = NULL;  v->arn = 0;  v->mem = NULL;
   v->clsm = NULL;
   memset(v->ab, 0, sizeof v->ab);  v->aglob = v->astep = 0;
   memset(&v->cm, 0, sizeof v->cm);  v->cm_mask = 0;  memset(v->nv0, 0, sizeof v->nv0);
   memset(v->nv1, 0, sizeof v->nv1);  memset(v->nidx, 0, sizeof v->nidx);
   memset(v->nrun, 0, sizeof v->nrun);
   v->nxv = 0;  v->npch = -1;  v->nstarted = 0;
+  v->symbols = NULL; v->nsymbols = v->csymbols = 0; v->symfull = 0;
   v->ys = NULL;  v->ysn = 0;  v->cs = NULL;  v->csn = 0;
   memset(v->fpl, 0, sizeof v->fpl);
   v->hu = 0;  v->psl = 0;
@@ -126,6 +128,7 @@ void vb_tune_get(vb_tune * t, const u8 * p, sz n) {
 }
 
 static void bk_free(vb_book * b) {
+  free(b->fast); free(b->fastbits);
   free(b->len);  free(b->code);  free(b->nd);  free(b->mult);  free(b->inv);
 }
 
@@ -143,9 +146,11 @@ void vb_free(vb_ctx * v) {
   free(v->su);  v->su = NULL;  v->nsu = 0;  v->cur = NULL;
   Fi(VB_MAXSLOT, free(v->sl[i].len));
   memset(v->sl, 0, sizeof v->sl);  v->nsl = 0;
-  free(v->ar);  v->ar = NULL;  free(v->ac);  v->ac = NULL;
+  if (v->ar) Fi((v->arn + VB_APSIZE - 1) / VB_APSIZE, free(v->ar[i]));
+  free(v->ar);  v->ar = NULL;
   free(v->mem);  v->mem = NULL;
   free(v->clsm);  v->clsm = NULL;
+  free(v->symbols); v->symbols = NULL;
   free(v->ys);  v->ys = NULL;  free(v->cs);  v->cs = NULL;
   v->ysn = v->csn = 0;
 }
@@ -158,8 +163,8 @@ void vb_level(vb_ctx * v, int lev) {
   /*  Header packets need these tables before the audio arena exists.  */
   rc_adapt_init();
   if (!v->cmtc) v->cmtc = xcalloc(VB_CBANK * VB_CSIZE, 1);
-  cm_alloc(v);
   v->cm_mask = CM_LEVMASK[lev];
+  if (v->cm_mask) cm_alloc(v);
 }
 
 void vb_slots(vb_ctx * v, u32 n) {
@@ -199,11 +204,9 @@ void vb_reset(vb_ctx * v) {
   if (v->cmtc) memset(v->cmtc, 0, VB_CBANK * VB_CSIZE);
   if (v->ar) {
     /*  AR_LIVE treats zero as pristine.  */
-    memset(v->ar, 0, (sz) v->aglob * sizeof *v->ar);
+    ar_clear(v, 0, v->aglob);
     memset(v->ai, 0, sizeof v->ai);
-    memset(v->ac, 0, v->aglob);
-    /*  Mark slot regions for clearing on their next use.  */
-    v->acz = 0;
+    /* Slot regions are cleared on their next use. */
   }
   Fi(VB_MAXSLOT, free(v->sl[i].len));
   memset(v->sl, 0, sizeof v->sl);  memset(v->st, 0, sizeof v->st);
@@ -234,6 +237,8 @@ static const u8 RST[] = {
 
 typedef struct {
   int enc;
+  int replay; sz symbol;
+  int probe, shortpkt;        /*  syntax-only traversal, without model updates  */
   rc_enc * e[3];
   rc_dec * d[3];
   vb_ctx * v;
@@ -253,6 +258,9 @@ static INLINE int cbit(io * z, int s, u16 * p, u8 * c, int b) {
 static u32 bget(io * z, int n) {
   u32 r = 0;
   int i;
+  if (z->probe && z->pos + (sz) n > z->len * 8) {
+    z->shortpkt = 1;  return 0;
+  }
   FATAL_IF_HOT(z->pos + (sz) n > z->len * 8)("vorbis: packet ends inside a field");
   for (i = 0; i < n; i++, z->pos++)
     r |= (u32) ((z->b[z->pos >> 3] >> (z->pos & 7)) & 1) << i;
@@ -834,6 +842,7 @@ static void hdr(io * z, int which) {
 static void ioinit(io * z, vb_ctx * v, int enc, u8 * pkt, sz len) {
   sz i;
   z->enc = enc;  z->v = v;  z->b = pkt;  z->len = len;  z->pos = 0;
+  z->probe = z->shortpkt = z->replay = 0; z->symbol = 0;
   Fi(3, z->e[i] = NULL;  z->d[i] = NULL);
 }
 
@@ -882,7 +891,9 @@ static INLINE u32 atab(const vb_ctx * v, int t, u32 idx) {
 static INLINE u16 * ar(vb_ctx * v, u32 at) {
   FATAL_IF_HOT((sz) at >= v->arn)
     ("vorbis: audio model slot %lu out of range", (unsigned long) at);
-  return v->ar + at;
+  if (!v->ar[at >> VB_APBITS])
+    v->ar[at >> VB_APBITS] = xcalloc(1, sizeof(vb_apage));
+  return v->ar[at >> VB_APBITS]->p + (at & (VB_APSIZE - 1));
 }
 
 /*  Zero arena entries lazily expand to RC_PINIT.  */
@@ -893,8 +904,8 @@ static INLINE int abit(io * z, u32 at, int lim, int b) {
   vb_ctx * v = z->v;
   u16 * p = ar(v, at);
   AR_LIVE(p);
-  if (!z->enc) return rc_dec_bit_ad(z->d[S_BULK], p, v->ac + at, lim);
-  rc_enc_bit_ad(z->e[S_BULK], p, v->ac + at, lim, b);
+  if (!z->enc) return rc_dec_bit_ad(z->d[S_BULK], p, v->ar[at >> VB_APBITS]->c + (at & (VB_APSIZE - 1)), lim);
+  rc_enc_bit_ad(z->e[S_BULK], p, v->ar[at >> VB_APBITS]->c + (at & (VB_APSIZE - 1)), lim, b);
   return b;
 }
 
@@ -907,14 +918,25 @@ static void arena(vb_ctx * v) {
   for (at = 0, t = A_NGLOB; t < A_NTAB; t++) { v->ab[t] = at;  at += AR_SIZE[t]; }
   v->astep = at;
   v->arn = (sz) v->aglob + (sz) v->ns * v->astep;
-  v->ar = xcalloc(v->arn, sizeof *v->ar);
-  v->ac = xcalloc(v->arn, 1);
-  v->acz = 1;                 /*  fresh from calloc: every count reads zero,
-                                  and every probability reads RC_PINIT  */
+  v->ar = xcalloc((v->arn + VB_APSIZE - 1) / VB_APSIZE, sizeof *v->ar);
   memset(v->ai, 0, sizeof v->ai);
   memset(v->ad, 0, sizeof v->ad);
   v->mem = xcalloc(VB_MEMSZ, 1);
   v->clsm = xcalloc(VB_CLSMSZ, 1);
+}
+
+/* Clear a model range without allocating its untouched pages. Slot boundaries
+   need not align with pages; preserve neighboring slots on partial pages. */
+static void ar_clear(vb_ctx * v, sz at, sz n) {
+  while (n) {
+    sz off = at & (VB_APSIZE - 1), take = MIN(n, VB_APSIZE - off);
+    vb_apage * p = v->ar[at >> VB_APBITS];
+    if (p) {
+      memset(p->p + off, 0, take * sizeof *p->p);
+      memset(p->c + off, 0, take);
+    }
+    at += take;  n -= take;
+  }
 }
 
 /*  Return slot k's table base, seeding on first use. Previously untouched
@@ -925,8 +947,7 @@ static u32 ar_slot(vb_ctx * v, u32 k) {
     ("vorbis: model slot %lu out of range", (unsigned long) k);
   if (!v->ai[k]) {
     if (v->ad[k]) {
-      memset(v->ar + at, 0, (sz) v->astep * sizeof *v->ar);
-      memset(v->ac + at, 0, v->astep);
+      ar_clear(v, at, v->astep);
     }
     v->ai[k] = 1;  v->ad[k] = 1;
   }
@@ -939,15 +960,60 @@ static u32 * scratch(u32 ** p, sz * have, sz want) {
 }
 
 
+/* Small prefix tables replace most bit-at-a-time codeword walks. */
+static void bk_fast(vb_book * b) {
+  u32 i, j;
+  b->fast = xmalloc(256 * sizeof *b->fast); b->fastbits = xmalloc(256);
+  Fi(256,
+    i32 t = 0;
+    for (j = 0; j < 8; j++) {
+      t = b->nd[2 * (u32) t + ((i >> j) & 1)];
+      if (t <= 0) { j++; break; }
+    }
+    b->fast[i] = t; b->fastbits[i] = (u8) j);
+}
+
+/* Cache only one packet's parsed symbols, capped at 256 KiB. Large unusual
+   packets use the same checked traversal without caching. */
 static u32 bk_get(io * z, vb_book * b) {
-  u32 idx = 0;
+  u32 idx = 0, e;
   i32 t;
-  for (;;) {
-    t = b->nd[2 * idx + bget1(z)];
+  if (z->replay) {
+    e = z->v->symbols[z->symbol++]; z->pos += b->len[e]; return e;
+  }
+  if (z->len * 8 - z->pos >= 8) {
+    sz at = z->pos >> 3;
+    unsigned shift = (unsigned) (z->pos & 7);
+    u32 prefix = z->b[at];
+    if (shift) prefix |= (u32) z->b[at + 1] << 8;
+    prefix = (prefix >> shift) & 255;
+    if (!b->fast) bk_fast(b);
+    t = b->fast[prefix]; z->pos += b->fastbits[prefix];
     FATAL_IF_HOT(t == 0)("vorbis: the packet holds no such codeword");
-    if (t < 0) return (u32) (-t - 1);
+    if (t < 0) goto found;
     idx = (u32) t;
   }
+  for (;;) {
+    if (z->probe && z->pos >= z->len * 8) {
+      z->shortpkt = 1; return 0;
+    }
+    t = b->nd[2 * idx + bget1(z)];
+    FATAL_IF_HOT(t == 0)("vorbis: the packet holds no such codeword");
+    if (t < 0) break;
+    idx = (u32) t;
+  }
+found:
+  e = (u32) (-t - 1);
+  if (z->probe && !z->v->symfull) {
+    vb_ctx * v = z->v;
+    if (v->nsymbols == v->csymbols) {
+      if (v->csymbols == (1UL << 16)) { v->symfull = 1; return e; }
+      v->csymbols = v->csymbols ? v->csymbols * 2 : 256;
+      v->symbols = xrealloc(v->symbols, v->csymbols * sizeof *v->symbols);
+    }
+    v->symbols[v->nsymbols++] = e;
+  }
+  return e;
 }
 
 static void bk_put(io * z, vb_book * b, u32 e) {
@@ -1002,15 +1068,18 @@ static int fl_get(io * z, vb_floor * f, u32 * y) {
   if (!bget(z, 1)) return 0;
   p = blr_ilog(f->quant - 1);
   y[0] = bget(z, p);  y[1] = bget(z, p);
+  if (z->shortpkt) return 0;
   Fi(f->parts,
     u32 c = f->pcls[i], cv0;
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) cv = bk_get(z, s->bk + f->cbook[c]);
+    if (z->shortpkt) return 0;
     cv0 = cv;
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0);
+      y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
+      if (z->shortpkt) return 0);
     /*  Recreate libvorbis's first matching subclass choice exactly.  */
     FATAL_UNLESS(!(cv0 >> (cs * cd)),
                  "vorbis: floor class codeword exceeds its dimension");
@@ -1086,7 +1155,7 @@ static INLINE int pbit(io * z, u32 off, int st, int sel, u32 h, int exp,
   vb_ctx * v = z->v;
   u16 * p = ar(v, off);
   AR_LIVE(p);
-  return cm_bit(&v->cm, st, sel, h, p, v->ac + off, exp, b);
+  return cm_bit(&v->cm, st, sel, h, p, v->ar[off >> VB_APBITS]->c + (off & (VB_APSIZE - 1)), exp, b);
 }
 
 /*  Route enabled stages through CM and others through the arena.  */
@@ -1261,6 +1330,7 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
   u32 k, e = 0, np = 1, t = 0, c, ch;
   i32 d;
   if (z->enc) { e = bk_get(z, b);  t = e; }
+  if (z->probe) return;
   if (il) { c = g / il;  ch = g % il; } else { c = g;  ch = 0; }
   Fk(b->dim,
     u32 chc = ch > 3 ? 3 : ch;
@@ -1296,9 +1366,10 @@ static HOT FLATTEN void rs_part(io * z, vb_res * r, vb_book * b, u32 q,
     FATAL_IF_HOT(st * b->dim != r->psz)
       ("vorbis: residue 0 partition %lu not divisible by %lu",
        (unsigned long) r->psz, (unsigned long) b->dim);
-    Fi(st, rs_sym(z, b, q, pass, g + i, st, il));
+    Fi(st, rs_sym(z, b, q, pass, g + i, st, il);
+           if (z->shortpkt) return);
   } else
-    for (i = 0; i < r->psz; i += b->dim)
+    for (i = 0; i < r->psz && !z->shortpkt; i += b->dim)
       rs_sym(z, b, q, pass, g + i, 1, il);
 }
 
@@ -1327,13 +1398,14 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
         Fj(vch,
           if (z->enc) {
             cw = bk_get(z, cb);
+            if (z->shortpkt) return;
             for (k = pv; k > 0; k--) { cl[j * w + pc + k - 1] = cw % r->ncl;
                                        cw /= r->ncl; }
             /*  Refuse unused digits that would change the rebuilt codeword.  */
             FATAL_UNLESS(!cw, "vorbis: residue classword exceeds its partitions");
           }
           PROF(prof_ch = j);
-          Fk(pv, cl[j * w + pc + k] = rs_cls(z, q, j, pc + k,
+          if (!z->probe) Fk(pv, cl[j * w + pc + k] = rs_cls(z, q, j, pc + k,
                                              z->enc ? cl[j * w + pc + k] : 0));
           if (!z->enc) {
             cw = 0;
@@ -1350,7 +1422,8 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
           bn = r->book[cl[j * w + pc]][pass];
           PROF(prof_rcls = cl[j * w + pc];  prof_rpart = pc);
           if (bn >= 0)
-            rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il));
+            rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il);
+          if (z->shortpkt) return);
         pc++);
     }
   }
@@ -1378,6 +1451,8 @@ static void payload(io * z, u32 mode) {
     int u = 0;
     PROF(prof_ch = k);
     if (z->enc) u = fl_get(z, f, yc);
+    if (z->shortpkt) return;
+    if (z->probe) { nz[k] = (u8) u;  continue; }
     PROF(prof_site = P_USED);
     u = abit(z, atab(v, A_USED, v->hu), v->t.alim, u);
     PROF(prof_site = P_VOTHER);
@@ -1392,7 +1467,40 @@ static void payload(io * z, u32 mode) {
   Fi(mp->sub,
     m = 0;
     Fj(ch, if (mp->mux[j] == i) sub[m++] = nz[j]);
-    if (m) residue(z, mp->rs[i], sub, m, n));
+    if (m) residue(z, mp->rs[i], sub, m, n);
+    if (z->shortpkt) return);
+}
+
+/*  Vorbis permits packet peeling and arbitrary tail padding. Probe the syntax
+    before touching adaptive state; exceptional packets are stored verbatim.
+    The scratch arrays may change, but no coding model or history may change.  */
+static int audio_verbatim(io * z) {
+  io p = *z;
+  u32 md;
+  p.probe = 1; z->v->nsymbols = 0; z->v->symfull = 0;
+  FATAL_UNLESS(z->v->cur && z->v->cur->nmd, "vorbis: audio before setup");
+  FATAL_UNLESS(bget(&p, 1) == 0, "vorbis: header on audio path");
+  md = bget(&p, (int) blr_ilog(z->v->cur->nmd - 1));
+  FATAL_UNLESS(md < z->v->cur->nmd, "vorbis: invalid audio mode");
+  if (z->v->cur->blockflag[md]) bget(&p, 2);
+  if (p.shortpkt) return 1;
+  payload(&p, md);
+  if (p.shortpkt || p.len * 8 - p.pos >= 8) return 1;
+  return bget(&p, (int) (p.len * 8 - p.pos)) != 0;
+}
+
+static sz raw_audio(io * z) {
+  sz i;
+  int k;
+  Fi(z->len,
+    u32 b = z->enc ? z->b[i] : 0;
+    for (k = 0; k < 8; k++) {
+      if (z->enc) rc_enc_bit_raw(z->e[S_BULK], RC_PINIT, (b >> k) & 1);
+      else b |= (u32) rc_dec_bit_raw(z->d[S_BULK], RC_PINIT) << k;
+    }
+    if (!z->enc) z->b[i] = (u8) b);
+  FATAL_UNLESS(z->len && !(z->b[0] & 1), "vorbis: invalid verbatim audio packet");
+  return z->len * 8;
 }
 
 static sz audio(io * z, int cont) {
@@ -1403,17 +1511,22 @@ static sz audio(io * z, int cont) {
   FATAL_UNLESS(v->cur && v->cur->nmd > 0, "vorbis: audio before setup");
   d = (int) blr_ilog(v->cur->nmd - 1);
   PROF(prof_pkt++);
-  arena(v);
-  cm_bind(&v->cm, z->e[S_BULK], z->d[S_BULK]);
-  /*  The audio packet type is always zero.  */
+  /*  Type 1 stores a verbatim packet; type 0 uses the audio model.  */
   if (z->enc) {
+    int raw = audio_verbatim(z);
+    mdl_enc(&v->apt, z->e[S_TYPE], (u32) raw);
+    if (raw) return raw_audio(z);
+    z->replay = !v->symfull;
     FATAL_UNLESS(bget(z, 1) == 0, "vorbis: header on audio path");
-    mdl_enc(&v->apt, z->e[S_TYPE], 0);
   } else {
-    FATAL_UNLESS(mdl_dec(&v->apt, z->d[S_TYPE]) == 0,
-                 "vorbis: nonzero audio packet type");
+    u32 type = mdl_dec(&v->apt, z->d[S_TYPE]);
+    FATAL_UNLESS(type <= 1,
+                 "vorbis: invalid audio packet type");
+    if (type) return raw_audio(z);
     bput(z, 1, 0);
   }
+  arena(v);
+  cm_bind(&v->cm, z->e[S_BULK], z->d[S_BULK]);
 
   bank = (u32) (cont & 1) + (u32) (v->pm & 1) * 2 + (u32) v->pw[1] * 4;
   md = z->enc ? bget(z, d) : 0;
@@ -1434,6 +1547,8 @@ static sz audio(io * z, int cont) {
       if (!z->enc) bput(z, 1, (u32) w[i]));
   v->pm = (u8) md;  v->pw[0] = (u8) w[0];  v->pw[1] = (u8) w[1];
   payload(z, md);
+  FATAL_IF_HOT(z->replay && z->symbol != v->nsymbols)
+    ("internal: Vorbis symbol replay mismatch");
   /*  Only byte-alignment padding may remain.  */
   FATAL_UNLESS(z->len * 8 - z->pos < 8, "vorbis: %lu unparsed audio bits",
                (unsigned long) (z->len * 8 - z->pos));

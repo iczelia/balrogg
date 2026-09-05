@@ -80,6 +80,8 @@ typedef struct {
   u8 look;                    /*  lookup type: 0 none, 1 the VQ grid  */
   u8 * len;                   /*  codeword length per entry, 0 = unused  */
   u32 * code;                 /*  canonical codeword, most significant first  */
+  i32 * fast;                /* lazily built 8-bit prefix lookup */
+  u8 * fastbits;
   i32 * nd;                   /*  decode tree: two children per node, a
                                   negative child is -(entry + 1)  */
   u32 nv;                     /*  multiplicands, i.e. digits per dimension  */
@@ -194,6 +196,10 @@ extern const u8 CM_LEVMASK[CM_NLEV];
 /*  Previous Floor 1 length per post, shared across channels.  */
 #define VB_FPLSZ   ((sz) VB_MAXFLOOR * VB_MAXPOST)
 
+#define VB_APBITS 12
+#define VB_APSIZE (1U << VB_APBITS)
+typedef struct { u16 p[VB_APSIZE];  u8 c[VB_APSIZE]; } vb_apage;
+
 typedef struct {
   model m[M_N];
   u16 f[F_NSLOT];
@@ -214,8 +220,7 @@ typedef struct {
   vb_slot sl[VB_MAXSLOT];  u32 nsl, ns;
   u8 st[VB_MAXSLOT];          /*  which slots this link has touched  */
 
-  u16 * ar;  sz arn;          /*  the audio arena, in 16-bit slots  */
-  u8 * ac;                    /*  ... one observation count per slot  */
+  vb_apage ** ar;  sz arn;    /*  model pages allocated only when touched  */
   u32 ab[A_NTAB];             /*  each table's base within the arena  */
   u32 aglob, astep;           /*  the shared tables' span, and one slot's  */
 
@@ -229,9 +234,9 @@ typedef struct {
   i32 nxv;  int npch, nstarted;   /*  the immediately preceding digit  */
   u8 ai[VB_MAXSLOT];          /*  which slot regions of it are seeded yet  */
   u8 ad[VB_MAXSLOT];          /*  regions ever written  */
-  u8 acz;                     /*  ... and whether `ac` is still calloc-fresh  */
   u8 * mem;                   /*  VB_MEMSZ: [residue][pass][index][channel]  */
   u8 * clsm;                  /*  VB_CLSMSZ: the previous packet's class  */
+  u32 * symbols; sz nsymbols, csymbols; int symfull;
   u32 * ys;  sz ysn;          /*  scratch: floor posts, per channel  */
   u32 * cs;  sz csn;          /*  scratch: residue classifications  */
   u8 fpl[VB_FPLSZ];           /*  floor 1: the previous length per post  */

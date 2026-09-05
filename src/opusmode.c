@@ -29,56 +29,18 @@ const char * opus_mode_version(void) { return OPUS_PARSER_VERSION; }
     coding for uniform PVQ values.  */
 
 /*  Opus range coder and n-ary model.  */
-typedef struct {
-  u8 * buf;
-  sz cap, n;
-  u32 low, range;
-} orc_enc;
+typedef rc_enc orc_enc;
 
 typedef struct {
-  const u8 * buf;
-  sz len, pos;
+  blr_file * file;
+  sz off, len, pos;
   u32 code, range, ext;
 } orc_dec;
 
-static void orc_enc_init(orc_enc * e) {
-  e->cap = 1 << 16;  e->n = 0;  e->buf = xmalloc(e->cap);
-  e->low = 0;  e->range = 0xFFFFFFFFUL;
-}
-
-static void orc_enc_free(orc_enc * e) {
-  free(e->buf);  e->buf = NULL;  e->cap = e->n = 0;
-}
-
-static void orc_carry(orc_enc * e) {
-  sz i = e->n;
-  while (i > 0) {
-    if (e->buf[--i] != 0xFF) { e->buf[i]++;  return; }
-    e->buf[i] = 0;
-  }
-  FATAL("opus: range coder carry ran off the front of the stream");
-}
-
-static INLINE void orc_addlow(orc_enc * e, u32 v) {
-  u32 old = e->low;
-  e->low += v;
-  if (e->low < old) orc_carry(e);
-}
-
-static INLINE void orc_put(orc_enc * e, u8 c) {
-  if (e->n == e->cap) {
-    FATAL_IF_HOT(e->cap > SIZE_MAX / 2)("opus: range coder output is too large");
-    e->cap *= 2;  e->buf = xrealloc(e->buf, e->cap);
-  }
-  e->buf[e->n++] = c;
-}
-
-static INLINE void orc_norm(orc_enc * e) {
-  while (e->range < RC_TOP) {
-    orc_put(e, (u8) (e->low >> 24));
-    e->range <<= 8;  e->low <<= 8;
-  }
-}
+static void orc_enc_init(orc_enc * e, blr_file * output) { rc_enc_file(e, output); }
+static void orc_enc_free(orc_enc * e) { rc_enc_free(e); }
+static INLINE void orc_addlow(orc_enc * e, u32 v) { rc_addlow(e, v); }
+static INLINE void orc_norm(orc_enc * e) { rc_norm(e); }
 
 /*  Use the count-capped adaptation rate from rc.h.  */
 static INLINE u16 orc_adapt(u16 v, u8 * c, int bit) {
@@ -114,21 +76,13 @@ static void orc_enc_raw(orc_enc * e, u32 v, int nbits) {
   if (nbits > 0) orc_enc_cum(e, v, v + 1, 1UL << nbits);
 }
 
-static sz orc_enc_done(orc_enc * e) {
-  if (e->range > 0x2000000UL) { e->range = 0x800000UL;  orc_addlow(e, 0x1000000UL); }
-  else                        { e->range = 0x8000UL;    orc_addlow(e, 0x800000UL); }
-  do {
-    orc_put(e, (u8) (e->low >> 24));
-    e->range <<= 8;  e->low <<= 8;
-  } while (e->range < RC_TOP);
-  return e->n;
-}
+static void orc_enc_done(orc_enc * e) { rc_enc_finish(e); }
 
-static u32 orc_get(orc_dec * d) { return d->pos < d->len ? d->buf[d->pos++] : 0; }
+static u32 orc_get(orc_dec * d) { return d->pos < d->len ? bf_get(d->file, d->off + d->pos++) : 0; }
 
-static void orc_dec_init(orc_dec * d, const u8 * buf, sz len) {
+static void orc_dec_init(orc_dec * d, blr_file * file, sz off, sz len) {
   int i;
-  d->buf = buf;  d->len = len;  d->pos = 0;  d->code = 0;
+  d->file = file;  d->off = off;  d->len = len;  d->pos = 0;  d->code = 0;
   Fi(4, d->code = (d->code << 8) | orc_get(d));
   d->range = 0xFFFFFFFFUL;
 }
@@ -1126,8 +1080,8 @@ static void oc_page(oc_state * s, oc_pagehdr * p) {
 /*  Ogg framing over lacing values and packet boundaries.  */
 #define OPUS_MAXPKT (48 * 1275 + 64)  /*  48 frames of the largest legal size  */
 
-typedef struct { u8 * p;  int len; } opkt;
-typedef struct { int htype, nsegs;  u32 seqno;  opus_uint64 granule; } opage;
+typedef struct { sz off, end;  int len; } opkt;
+typedef struct { int htype, nsegs; u32 seqno; opus_uint64 granule; } opage;
 
 typedef struct {
   opkt * pk;  int npk, pkcap;
@@ -1137,26 +1091,46 @@ typedef struct {
 } ostream;
 
 static void st_free(ostream * s) {
-  int i;
-  if (s->pk) Fi(s->npk, free(s->pk[i].p));
   free(s->pk);  free(s->pg);
   memset(s, 0, sizeof *s);
 }
 
+/* Fetch a packet from its original pages; continued packets skip framing. */
+static void packet_read(blr_file * input, const opkt * pk, u8 * packet) {
+  sz at = pk->off, end = pk->end, left = (sz) pk->len;
+  while (left) {
+    sz take = MIN(left, end - at);
+    bf_read(input, at, packet, take);
+    packet += take;  at += take;  left -= take;
+    if (left) {
+      u8 h[OGG_HDRMIN + OGG_MAXSEG];
+      sz n, i;
+      bf_read(input, end, h, OGG_HDRMIN);
+      FATAL_UNLESS(!memcmp(h, "OggS", 4), "opus: missing continuation page");
+      n = h[26];  bf_read(input, end + OGG_HDRMIN, h + OGG_HDRMIN, n);
+      at = end + OGG_HDRMIN + n;  end = at;
+      Fi(n, end += h[OGG_HDRMIN + i]);
+    }
+  }
+}
+
 /*  Split Ogg Opus input into packets and page headers.  */
-static int parse_stream(const u8 * buf, sz len, ostream * s) {
-  sz off = 0;
-  u8 * acc = xmalloc(OPUS_MAXPKT);
+static int parse_stream(blr_file * input, ostream * s) {
+  sz off = 0, len = input->len, pstart = 0, pend = 0;
+  u8 * page = xmalloc(OGG_HDRMIN + OGG_MAXSEG + 65025);
+  u8 head[19];
   int acclen = 0;
   memset(s, 0, sizeof *s);
+
   while (off + OGG_HDRMIN <= len) {
     int i, boff = 0;
     sz got;
     ogg_page p;
-    const u8 * h = buf + off;
+    const u8 * h = page;
+    bf_read(input, off, page, OGG_HDRMIN);
     if (memcmp(h, "OggS", 4)) { fprintf(stderr, "balrogg: not an Ogg file\n");  goto bad; }
     if (h[4]) { fprintf(stderr, "balrogg: unsupported Ogg version %u\n", h[4]);  goto bad; }
-    got = ogg_parse(&p, h, len - off);
+    got = ogg_read(input, off, &p, page);
     if (!got) { fprintf(stderr, "balrogg: truncated Ogg page\n");  goto bad; }
     /*  CRCs must be valid because rebuild() recomputes them.  */
     if (!ogg_crc_ok(h, got)) {
@@ -1185,7 +1159,7 @@ static int parse_stream(const u8 * buf, sz len, ostream * s) {
     Fi(p.nseg,
       int sl = p.lace[i];
       if (acclen + sl > OPUS_MAXPKT) { fprintf(stderr, "balrogg: over-long Opus packet\n");  goto bad; }
-      memcpy(acc + acclen, h + OGG_HDRMIN + p.nseg + boff, (sz) sl);
+      if (!acclen) { pstart = off + OGG_HDRMIN + p.nseg + (sz) boff; pend = off + got; }
       acclen += sl;  boff += sl;
       if (sl < 255) {
         if (s->npk == s->pkcap) {
@@ -1196,94 +1170,102 @@ static int parse_stream(const u8 * buf, sz len, ostream * s) {
           s->pkcap = s->pkcap ? s->pkcap * 2 : 4096;
           s->pk = xrealloc(s->pk, (sz) s->pkcap * sizeof *s->pk);
         }
-        s->pk[s->npk].p = xmalloc((sz) acclen);
-        memcpy(s->pk[s->npk].p, acc, (sz) acclen);
+        s->pk[s->npk].off = pstart;
+        s->pk[s->npk].end = pend;
         s->pk[s->npk].len = acclen;
         s->npk++;  acclen = 0;
       });
     off += got;
   }
-  free(acc);
+  free(page);
+  memset(head, 0, sizeof head);
+  if (s->npk) { opkt first = s->pk[0];
+    first.len = (int) MIN((sz) first.len, sizeof head);
+    packet_read(input, &first, head); }
   if (off != len) { fprintf(stderr, "balrogg: data follows the last Ogg page\n");  return 1; }
   if (acclen) { fprintf(stderr, "balrogg: incomplete final Opus packet\n");  return 1; }
-  if (s->npk < 2 || s->pk[0].len < 8 || memcmp(s->pk[0].p, "OpusHead", 8)) {
+  if (s->npk < 2 || s->pk[0].len < 8 || memcmp(head, "OpusHead", 8)) {
     fprintf(stderr, "balrogg: not an Ogg Opus stream\n");  return 1;
   }
   if (s->pk[0].len < 19) { fprintf(stderr, "balrogg: truncated OpusHead\n");  return 1; }
-  if (s->pk[0].p[18]) {
-    fprintf(stderr, "balrogg: unsupported channel mapping family %d\n", s->pk[0].p[18]);
+  if (head[18]) {
+    fprintf(stderr, "balrogg: unsupported channel mapping family %d\n", head[18]);
     return 1;
   }
-  s->channels = s->pk[0].p[9];
+  s->channels = head[9];
   if (s->channels < 1 || s->channels > 2) {
     fprintf(stderr, "balrogg: unsupported channel count %d\n", s->channels);
     return 1;
   }
+  s->pk = xrealloc(s->pk, (sz) s->npk * sizeof *s->pk);
+  s->pg = xrealloc(s->pg, (sz) s->npg * sizeof *s->pg);
+  s->pkcap = s->npk;  s->pgcap = s->npg;
   return 0;
 bad:
-  free(acc);
+  free(page);
   return 1;
 }
 
-/*  Rebuild pages, lacing, and CRCs.  */
-static u8 * rebuild(const ostream * s, sz * outlen) {
-  sz cap = 1UL << 20, n = 0;
-  u8 * o = xmalloc(cap);
-  int pi = 0, po = 0, i;
-  Fi(s->npg,
-    u8 hdr[OGG_HDRMIN + OGG_MAXSEG];
-    int ns = s->pg[i].nsegs, k, sp = pi, sq = po;
-    sz bodylen = 0, bstart, w;
-    Fk(ns,
-      int rem;
-      FATAL_UNLESS(sp < s->npk, "opus: page %d ran out of packets", i);
-      rem = s->pk[sp].len - sq;
-      if (rem >= 255) { hdr[OGG_HDRMIN + k] = 255;  sq += 255; }
-      else { hdr[OGG_HDRMIN + k] = (u8) rem;  sq = 0;  sp++; }
-      bodylen += hdr[OGG_HDRMIN + k]);
-    memcpy(hdr, "OggS", 4);  hdr[4] = 0;  hdr[5] = (u8) s->pg[i].htype;
-    Fk(8, hdr[6 + k] = (u8) ((s->pg[i].granule >> (8 * k)) & 0xFF));
-    Fk(4, hdr[14 + k] = (u8) ((s->serial >> (8 * k)) & 0xFF));
-    Fk(4, hdr[18 + k] = (u8) ((s->pg[i].seqno >> (8 * k)) & 0xFF));
-    memset(hdr + 22, 0, 4);  hdr[26] = (u8) ns;
-    FATAL_UNLESS(n <= SIZE_MAX - OGG_HDRMIN - (sz) ns
-                 && bodylen <= SIZE_MAX - n - OGG_HDRMIN - (sz) ns,
-                 "opus: output is too large");
-    while (n + OGG_HDRMIN + (sz) ns + bodylen > cap) {
-      FATAL_UNLESS(cap <= SIZE_MAX / 2, "opus: output is too large");
-      cap *= 2;  o = xrealloc(o, cap);
-    }
-    memcpy(o + n, hdr, OGG_HDRMIN + (sz) ns);
-    bstart = n + OGG_HDRMIN + (sz) ns;  w = bstart;
-    Fk(ns,
-      int sl = hdr[OGG_HDRMIN + k];
-      memcpy(o + w, s->pk[pi].p + po, (sz) sl);
-      w += sl;  po += sl;
-      if (sl < 255) { po = 0;  pi++; });
-    ogg_crc_set(o + n, OGG_HDRMIN + (sz) ns + bodylen);
-    n = bstart + bodylen);
-  FATAL_UNLESS(pi == s->npk && po == 0,
-               "opus: page layout leaves %d packets", s->npk - pi);
-  *outlen = n;
-  return o;
+/* Page metadata precedes packets, so decoding emits each completed page once. */
+typedef struct {
+  const ostream * stream;
+  blr_file * output;
+  u8 * page;
+  int pg, seg;
+  sz body;
+} page_writer;
+
+static void page_flush(page_writer * w) {
+  const opage * p = w->stream->pg + w->pg;
+  u8 * o = w->page;
+  sz size = OGG_HDRMIN + (sz) p->nsegs + w->body;
+  int k;
+  memcpy(o, "OggS", 4); o[4] = 0; o[5] = (u8) p->htype;
+  Fk(8, o[6 + k] = (u8) (p->granule >> (8 * k)));
+  Fk(4, o[14 + k] = (u8) (w->stream->serial >> (8 * k));
+        o[18 + k] = (u8) (p->seqno >> (8 * k)));
+  memset(o + 22, 0, 4); o[26] = (u8) p->nsegs;
+  ogg_crc_set(o, size); bf_write(w->output, w->output->len, o, size);
+  w->pg++; w->seg = 0; w->body = 0;
+}
+
+static void page_empty(page_writer * w) {
+  while (w->pg < w->stream->npg && !w->stream->pg[w->pg].nsegs) page_flush(w);
+}
+
+static void page_packet(page_writer * w, const u8 * packet, sz len) {
+  sz take;
+  do {
+    int ns;
+    page_empty(w);
+    FATAL_UNLESS(w->pg < w->stream->npg, "opus: packets exceed page layout");
+    ns = w->stream->pg[w->pg].nsegs;
+    take = MIN(len, (sz) 255);
+    w->page[OGG_HDRMIN + w->seg++] = (u8) take;
+    memcpy(w->page + OGG_HDRMIN + ns + w->body, packet, take);
+    w->body += take; packet += take; len -= take;
+    if (w->seg == ns) page_flush(w);
+  } while (take == 255);
 }
 
 int opus_pack(const char * in, const char * out, int lev) {
   ostream s;
   orc_enc e;
   oc_state cs;
-  archive a;
   OpusDecoder * dec = NULL;
-  u8 * buf, * ar;
-  sz len, alen;
+  u8 * packet = xmalloc(OPUS_MAXPKT);
+  blr_file * input = bf_open(in, 0);
+  archive a;
+  blr_file * output = NULL;
   int i, err = 0, rc = BLR_EXIT_REFUSED;
   u32 u;
 
   FATAL_UNLESS(lev >= 0 && lev <= PVQ_LEVMAX, "opus: level %d is out of range", lev);
   pvq_lev = lev;
-  e.buf = NULL;
-  buf = slurp(in, &len);
-  if (parse_stream(buf, len, &s)) goto done;
+  memset(&e, 0, sizeof e);
+  arc_init(&a, (u8) (0x09 | ARC_OPUS | (lev << 5)));
+  if (parse_stream(input, &s)) goto done;
+  blr_progress_begin(in, "encoding", (sz) s.npk);
   /*  Match the decoder's count limits.  */
   if (s.npk > (1L << 24) || s.npg > (1L << 24)) {
     fprintf(stderr, "balrogg: %s has %d packets on %d pages, limit %ld\n",
@@ -1297,14 +1279,22 @@ int opus_pack(const char * in, const char * out, int lev) {
       goto done;
     });
 
-  orc_enc_init(&e);
+  output = bf_open(out, 1); arc_begin(&a, output);
+  orc_enc_init(&e, arc_newstream(&a));
   om_init();  om_mode = OM_ENC;  E = &e;  D = NULL;
   memset(&cs, 0, sizeof cs);
 
   u = (u32) s.npk;  oc_u32(&u);
   u = (u32) s.npg;  oc_u32(&u);
   u = s.serial;     oc_u32(&u);
-  Fi(2, int n = s.pk[i].len;  oc_blob(s.pk[i].p, &n));
+  Fi(s.npg,
+    oc_pagehdr p;
+    p.htype = s.pg[i].htype;  p.nsegs = s.pg[i].nsegs;
+    p.seqno = s.pg[i].seqno;  p.granule = s.pg[i].granule;
+    oc_page(&cs, &p));
+
+  Fi(2, int n = s.pk[i].len;
+        packet_read(input, s.pk + i, packet);  oc_blob(packet, &n));
 
   dec = opus_decoder_create(s.channels);
   if (!dec) { fprintf(stderr, "balrogg: %s cannot create Opus decoder\n", in);  goto done; }
@@ -1314,7 +1304,8 @@ int opus_pack(const char * in, const char * out, int lev) {
     const unsigned char * frames[48];
     opus_int16 sizes[48];
     int poff = 0, nf, j, sum = 0, L = s.pk[i].len;
-    nf = opus_packet_parse(s.pk[i].p, L, &toc, frames, sizes, &poff);
+    packet_read(input, s.pk + i, packet);
+    nf = opus_packet_parse(packet, L, &toc, frames, sizes, &poff);
     if (nf < 0) { fprintf(stderr, "balrogg: %s packet %d parse failed (%d)\n", in, i, nf);  goto done; }
     if (poff < 1 || poff >= OC_HDRMAX) {
       fprintf(stderr, "balrogg: %s packet %d header is %d bytes, limit %d\n",
@@ -1322,29 +1313,23 @@ int opus_pack(const char * in, const char * out, int lev) {
       goto done;
     }
     Fj(nf, sum += sizes[j]);
-    oc_packet_hdr(&cs, &poff, s.pk[i].p, &L);
-    oc_packet_trailer(L - poff - sum, s.pk[i].p + poff + sum);
+    oc_packet_hdr(&cs, &poff, packet, &L);
+    oc_packet_trailer(L - poff - sum, packet + poff + sum);
     oe_begin();  orec_mode = OREC_ANALYZE;
-    err = opus_decode(dec, s.pk[i].p, L);
+    err = opus_decode(dec, packet, L);
     oe_end();  orec_mode = OREC_OFF;
     if (err < 0) { fprintf(stderr, "balrogg: %s packet %d decode failed (%d)\n", in, i, err);  goto done; }
+    blr_progress_update((sz) i + 1);
   }
 
-  Fi(s.npg,
-    oc_pagehdr p;
-    p.htype = s.pg[i].htype;  p.nsegs = s.pg[i].nsegs;
-    p.seqno = s.pg[i].seqno;  p.granule = s.pg[i].granule;
-    oc_page(&cs, &p));
-
-  arc_init(&a, (u8) (0x09 | ARC_OPUS | (lev << 5)));
-  arc_push(&a, e.buf, orc_enc_done(&e));
-  ar = arc_emit(&a, &alen);
-  spew(out, ar, alen);
-  free(ar);  arc_free(&a);
+  orc_enc_done(&e); arc_finish(&a);
   rc = BLR_EXIT_OK;
 done:
+  if (rc) blr_progress_cancel();
   if (dec) opus_decoder_destroy(dec);
-  orc_enc_free(&e);  free(buf);  st_free(&s);  om_free();
+  orc_enc_free(&e); arc_free(&a); bf_close(output);
+  bf_close(input); free(packet); st_free(&s); om_free();
+  if (!rc) blr_progress_end();
   return rc;
 }
 
@@ -1354,21 +1339,22 @@ int opus_unpack(const char * in, const char * out) {
   oc_state cs;
   archive a;
   OpusDecoder * dec = NULL;
-  u8 * buf, * rb;
-  sz len, rlen;
+  u8 * packet = xmalloc(OPUS_MAXPKT);
+  blr_file * input = bf_open(in, 0), * output = NULL;
+  page_writer w;
+  memset(&w, 0, sizeof w);
   int i, err = 0, rc = BLR_EXIT_REFUSED;
   u32 u = 0;
 
   memset(&s, 0, sizeof s);
-  buf = slurp(in, &len);
-  arc_parse(&a, buf, len);
+  arc_read(&a, input);
   if (!(a.flags & ARC_OPUS) || a.n != 1) {
     fprintf(stderr, "balrogg: %s invalid Opus archive (%02x, %lu streams)\n",
             in, a.flags, (unsigned long) a.n);
     goto done;
   }
   pvq_lev = (int) ARC_LEVEL(a.flags);
-  orc_dec_init(&d, a.s[0].data, a.s[0].len);
+  orc_dec_init(&d, a.s[0].file, a.s[0].off, a.s[0].len);
   om_init();  om_mode = OM_DEC;  E = NULL;  D = &d;
   memset(&cs, 0, sizeof cs);
 
@@ -1379,6 +1365,7 @@ int opus_unpack(const char * in, const char * out) {
     goto done;
   }
   s.npk = (int) u;
+  blr_progress_begin(in, "decoding", (sz) s.npk);
   oc_u32(&u);
   if (u < 1 || u > (1UL << 24)) {
     fprintf(stderr, "balrogg: %s invalid page count %lu\n", in,
@@ -1387,23 +1374,32 @@ int opus_unpack(const char * in, const char * out) {
   }
   s.npg = (int) u;
   oc_u32(&u);  s.serial = u;
-  s.pk = xmalloc((sz) s.npk * sizeof *s.pk);
-  memset(s.pk, 0, (sz) s.npk * sizeof *s.pk);
   s.pg = xmalloc((sz) s.npg * sizeof *s.pg);
   memset(s.pg, 0, (sz) s.npg * sizeof *s.pg);
 
+  Fi(s.npg,
+    oc_pagehdr p;
+    memset(&p, 0, sizeof p);
+    oc_page(&cs, &p);
+    s.pg[i].htype = p.htype;  s.pg[i].nsegs = p.nsegs;
+    s.pg[i].seqno = p.seqno;  s.pg[i].granule = p.granule);
+
+  output = bf_open(out, 1); w.output = output; w.stream = &s;
+  w.page = xmalloc(OGG_HDRMIN + OGG_MAXSEG + 65025);
+
   Fi(2,
     int n = 0;
-    s.pk[i].p = xmalloc(OC_BLOBMAX);
-    oc_blob(s.pk[i].p, &n);
-    s.pk[i].len = n);
-  if (s.pk[0].len < 19 || memcmp(s.pk[0].p, "OpusHead", 8)) {
-    fprintf(stderr, "balrogg: %s has no OpusHead\n", in);  goto done;
-  }
-  s.channels = s.pk[0].p[9];
-  if (s.channels < 1 || s.channels > 2) {
-    fprintf(stderr, "balrogg: %s invalid channel count %d\n", in, s.channels);  goto done;
-  }
+    oc_blob(packet, &n);
+    if (!i) {
+      if (n < 19 || memcmp(packet, "OpusHead", 8)) {
+        fprintf(stderr, "balrogg: %s has no OpusHead\n", in); goto done;
+      }
+      s.channels = packet[9];
+      if (s.channels < 1 || s.channels > 2) {
+        fprintf(stderr, "balrogg: %s invalid channel count %d\n", in, s.channels); goto done;
+      }
+    }
+    page_packet(&w, packet, (sz) n));
 
   dec = opus_decoder_create(s.channels);
   if (!dec) { fprintf(stderr, "balrogg: %s cannot create Opus decoder\n", in);  goto done; }
@@ -1420,11 +1416,9 @@ int opus_unpack(const char * in, const char * out) {
               in, i, nhdr, L);
       goto done;
     }
-    s.pk[i].p = xmalloc((sz) L);
-    memset(s.pk[i].p, 0, (sz) L);
-    s.pk[i].len = L;
-    memcpy(s.pk[i].p, hdr, (sz) (nhdr < L ? nhdr : L));
-    nf = opus_packet_parse(s.pk[i].p, L, &toc, frames, sizes, &poff);
+    memset(packet, 0, (sz) L);
+    memcpy(packet, hdr, (sz) (nhdr < L ? nhdr : L));
+    nf = opus_packet_parse(packet, L, &toc, frames, sizes, &poff);
     if (nf < 0 || poff != nhdr) {
       fprintf(stderr, "balrogg: %s packet %d header mismatch "
                       "(parse %d, size %d, expected %d)\n",
@@ -1432,28 +1426,26 @@ int opus_unpack(const char * in, const char * out) {
       goto done;
     }
     Fj(nf, sum += sizes[j]);
-    oc_packet_trailer(L - nhdr - sum, s.pk[i].p + nhdr + sum);
+    oc_packet_trailer(L - nhdr - sum, packet + nhdr + sum);
     oe_begin();  orec_mode = OREC_SYNTH;
-    err = opus_decode(dec, s.pk[i].p, L);
+    err = opus_decode(dec, packet, L);
     oe_end();  orec_mode = OREC_OFF;
     if (err < 0) {
       fprintf(stderr, "balrogg: %s cannot rebuild packet %d (%d)\n", in, i, err);  goto done;
     }
+    page_packet(&w, packet, (sz) L);
+    blr_progress_update((sz) i + 1);
   }
 
-  Fi(s.npg,
-    oc_pagehdr p;
-    memset(&p, 0, sizeof p);
-    oc_page(&cs, &p);
-    s.pg[i].htype = p.htype;  s.pg[i].nsegs = p.nsegs;
-    s.pg[i].seqno = p.seqno;  s.pg[i].granule = p.granule);
 
-  rb = rebuild(&s, &rlen);
-  spew(out, rb, rlen);
-  free(rb);
+  page_empty(&w);
+  FATAL_UNLESS(w.pg == s.npg && !w.seg, "opus: page layout exceeds packets");
   rc = BLR_EXIT_OK;
 done:
+  if (rc) blr_progress_cancel();
   if (dec) opus_decoder_destroy(dec);
-  free(buf);  arc_free(&a);  st_free(&s);  om_free();
+  bf_close(output); free(w.page);
+  bf_close(input); free(packet); arc_free(&a); st_free(&s); om_free();
+  if (!rc) blr_progress_end();
   return rc;
 }

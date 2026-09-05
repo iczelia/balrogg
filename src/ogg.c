@@ -195,3 +195,19 @@ void ogg_hdr_dec(ogg_hdr * h, rc_dec * d, ogg_page * p, int first) {
     p->tail = !rc_dec_bit(d, &h->tl);
   ogg_pack(p);
 }
+
+/* The lacing table gives the exact page size before reading the body. */
+sz ogg_read(blr_file * file, sz off, ogg_page * p, u8 * image) {
+  sz n = OGG_HDRMIN, body = 0, i, seg;
+  if (off > file->len || file->len - off < OGG_HDRMIN) return 0;
+  bf_read(file, off, image, n);
+  if (memcmp(image, "OggS", 4)) return 0;
+  seg = image[26];
+  if (seg > file->len - off - n) return 0;
+  bf_read(file, off + n, image + n, seg);
+  Fi(seg, body += image[n + i]);
+  n += seg;
+  if (body > file->len - off - n) return 0;
+  bf_read(file, off + n, image + n, body);
+  return ogg_parse(p, image, n + body);
+}

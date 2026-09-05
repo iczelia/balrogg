@@ -97,10 +97,17 @@ extern int blr_fuzz_armed;
 void blr_memcap(void);
 
 void * xmalloc(sz n);
-/*  Use lazy zero pages for large, partly used model tables.  */
+/* Zero-initialize the requested, bounded allocation. */
 void * xcalloc(sz n, sz size);
 void * xrealloc(void * p, sz n);
 u8 * slurp(const char * path, sz * len);
 void spew(const char * path, const u8 * data, sz len);
+
+/*  Optional CLI progress on stderr: 0 off, 1 updating bar, 2 separate lines.  */
+extern int blr_progress_enabled;
+void blr_progress_begin(const char * path, const char * phase, sz total);
+void blr_progress_update(sz done);
+void blr_progress_end(void);
+void blr_progress_cancel(void);
 
 #endif

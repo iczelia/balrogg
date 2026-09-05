@@ -16,6 +16,7 @@
 #define BLR_RC_H
 
 #include "common.h"
+#include "file.h"
 
 /*  Binary range coder with 16-bit probabilities and a fixed 1/64 rate.  */
 
@@ -28,6 +29,9 @@ typedef struct {
   u32 range, code;
   const u8 * in;
   sz pos, len;
+  blr_file * file;
+  u8 * window;
+  sz off, base, avail;
   rc_hook hook;  void * hctx;
 } rc_dec;
 
@@ -38,10 +42,14 @@ typedef struct {
   sz pending;           /*  cache + (pending - 1) copies of 0xFF are owed.  */
   u8 * buf;
   sz len, cap;
+  blr_file * file;
   rc_hook hook;  void * hctx;
 } rc_enc;
 
 void rc_dec_init(rc_dec * d, const u8 * buf, sz len);
+void rc_dec_file(rc_dec * d, blr_file * f, sz off, sz len);
+void rc_dec_free(rc_dec * d);
+void rc_dec_refill(rc_dec * d);
 
 /*  Detect decoding beyond the zero-filled lookahead and safety margin.  */
 #define RC_SPENT_SLACK 64
@@ -50,6 +58,7 @@ static INLINE int rc_dec_spent(const rc_dec * d) {
 }
 
 void rc_enc_init(rc_enc * e);
+void rc_enc_file(rc_enc * e, blr_file * output);
 void rc_enc_free(rc_enc * e);
 /*  Finalise the stream; returns its length.  The bytes are rc_enc_data(e).  */
 sz rc_enc_finish(rc_enc * e);
@@ -82,6 +91,11 @@ extern void * rc_hook_ctx;
   else if (rc_hook_fn) rc_hook_fn(rc_hook_ctx, (p), (b))
 
 static INLINE void rc_put(rc_enc * e, u8 b) {
+  if (e->file) {
+    if (e->len) bf_put(e->file, b);
+    else FATAL_IF_HOT(b != 0)("range coder leading carry byte");
+    e->len++;  return;
+  }
   if (e->len == e->cap) {
     FATAL_IF_HOT(e->cap > SIZE_MAX / 2)("range coder output is too large");
     e->cap *= 2;  e->buf = xrealloc(e->buf, e->cap);
@@ -104,10 +118,16 @@ static INLINE void rc_norm(rc_enc * e) {
   while (e->range < RC_TOP) { rc_shift(e);  e->range <<= 8; }
 }
 
+static INLINE u8 rc_get(rc_dec * d) {
+  if (d->pos >= d->len) { d->pos++;  return 0; }
+  if (d->pos - d->base >= d->avail) rc_dec_refill(d);
+  return d->in[d->pos++ - d->base];
+}
+
 static INLINE void rc_dec_norm(rc_dec * d) {
   while (d->range < RC_TOP) {
-    d->code = (d->code << 8) | (d->pos < d->len ? d->in[d->pos] : 0);
-    d->pos++;  d->range <<= 8;
+    d->code = (d->code << 8) | rc_get(d);
+    d->range <<= 8;
   }
 }
 

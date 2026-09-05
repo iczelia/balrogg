@@ -13,12 +13,61 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "common.h"
+#include "file.h"
 
 #include <errno.h>
 #include <stdarg.h>
 #ifdef HAVE_SYS_RESOURCE_H
 #include <sys/resource.h>
 #endif
+
+int blr_progress_enabled;
+static const char * progress_path, * progress_phase;
+static sz progress_total;
+static int progress_last = -1, progress_live;
+
+static void progress_draw(int percent) {
+  char bar[21];
+  int i;
+  if (!blr_progress_enabled || !progress_live || percent == progress_last) return;
+  /*  Line-oriented batch/log output needs only twenty checkpoints.  */
+  if (blr_progress_enabled == 2 && percent < 100 && percent / 5 == progress_last / 5
+      && progress_last >= 0) return;
+  for (i = 0; i < 20; i++) bar[i] = i < percent / 5 ? '#' : '-';
+  bar[20] = 0;
+  fprintf(stderr, "%sbalrogg: %s: %s [%s] %3d%%%s",
+          blr_progress_enabled == 1 ? "\r" : "", progress_path, progress_phase,
+          bar, percent, blr_progress_enabled == 2 || percent == 100 ? "\n" : "");
+  fflush(stderr);
+  progress_last = percent;
+}
+
+void blr_progress_cancel(void) {
+  if (progress_live && blr_progress_enabled == 1) fputc('\n', stderr);
+  progress_live = 0;
+}
+
+void blr_progress_begin(const char * path, const char * phase, sz total) {
+  blr_progress_cancel();
+  if (!blr_progress_enabled) return;
+  progress_path = path;  progress_phase = phase;  progress_total = total;
+  progress_last = -1;  progress_live = 1;
+  progress_draw(0);
+}
+
+void blr_progress_update(sz done) {
+  int percent;
+  if (!blr_progress_enabled || !progress_live) return;
+  /*  Floating-point division avoids overflowing size_t on 32-bit hosts.  */
+  percent = !progress_total || done >= progress_total ? 99
+              : (int) (100.0 * (double) done / (double) progress_total);
+  progress_draw(percent);
+}
+
+void blr_progress_end(void) {
+  progress_draw(100);
+  progress_live = 0;
+}
 
 /*  Let fuzzers catch normal input rejection without treating it as a crash.  */
 #ifdef BLR_FUZZ
@@ -32,6 +81,7 @@ int blr_fuzz_armed;
 static void message(const char * fmt, va_list ap) BLR_PRINTF(1, 0);
 
 static void message(const char * fmt, va_list ap) {
+  blr_progress_cancel();
   fputs("balrogg: ", stderr);
   vfprintf(stderr, fmt, ap);
   fputc('\n', stderr);
@@ -122,7 +172,7 @@ void * xmalloc(sz n) {
   return p;
 }
 
-/*  calloc preserves lazy allocation for large, sparsely used tables.  */
+/* Zero-initialized allocation. Callers must bound the requested capacity. */
 void * xcalloc(sz n, sz size) {
   if (size && n > SIZE_MAX / size) oom(SIZE_MAX);
   void * p = calloc(n ? n : 1, size ? size : 1);
@@ -146,23 +196,33 @@ u8 * slurp(const char * path, sz * len) {
   b = xmalloc(cap);
   for (;;) {
     if (n == cap) {
-      if (cap > SIZE_MAX / 2)
+      sz add = MIN(cap, BLR_IO_CHUNK);
+      if (cap > SIZE_MAX - add)
         FATAL_CODE(BLR_EXIT_IO, "%s is too large", path);
-      cap *= 2;  b = xrealloc(b, cap);
+      cap += add;  b = xrealloc(b, cap);
     }
-    got = fread(b + n, 1, cap - n, f);
+    got = fread(b + n, 1, MIN(cap - n, BLR_IO_CHUNK), f);
     if (!got) break;
     n += got;
   }
   bad = ferror(f);
   if (fclose(f)) bad = 1;
   if (bad) FATAL_CODE(BLR_EXIT_IO, "read error on %s", path);
+  if (n < cap) b = xrealloc(b, n ? n : 1);
   *len = n;  return b;
 }
 
 void spew(const char * path, const u8 * data, sz len) {
   FILE * f = fopen(path, "wb");
+  sz at = 0;
+  int bad = 0;
   if (!f) FATAL_CODE(BLR_EXIT_IO, "cannot create %s", path);
-  if ((len && fwrite(data, 1, len, f) != len) || fclose(f))
+  while (at < len) {
+    sz n = MIN(len - at, BLR_IO_CHUNK);
+    if (fwrite(data + at, 1, n, f) != n) { bad = 1;  break; }
+    at += n;
+  }
+  if (fclose(f)) bad = 1;
+  if (bad)
     FATAL_CODE(BLR_EXIT_IO, "write error on %s", path);
 }

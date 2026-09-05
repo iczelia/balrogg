@@ -66,6 +66,8 @@ static void usage(FILE * to) {
     "  -1 .. -9      effort; -9 is the default\n"
     "  -b, --batch   process every remaining path\n"
     "  -j, --jobs=N  process N files at once\n"
+    "  -p, --progress show tuning and codec progress on stderr\n"
+    "  --progress-lines write progress as separate log lines\n"
     "  -h, --help    show help        -v, --version   show version\n"
     "\n"
     "Exit codes  0 success, 1 refused input, 2 usage, 3 I/O error,\n"
@@ -86,8 +88,9 @@ static void version(void) {
 static void dump(const char * path) {
   archive a;
   sz i, len;
-  u8 * b = slurp(path, &len);
-  arc_parse(&a, b, len);
+  blr_file * b = bf_open(path, 0);
+  len = b->len;
+  arc_read(&a, b);
   printf("%s: %lu bytes, flags 0x%02x (%lu slots, %s, level %d), %lu streams\n",
          path, (unsigned long) len, a.flags,
          (unsigned long) (ARC_BLOCK(a.flags) >> 10),
@@ -104,30 +107,32 @@ static void dump(const char * path) {
   }
   Fi(a.n, printf("  stream %lu: %lu bytes\n",
                  (unsigned long) i, (unsigned long) a.s[i].len));
-  arc_free(&a);  free(b);
+  arc_free(&a);  bf_close(b);
 }
 
 /*  Print framing rebuilt from the parsed page.  */
 static void pages(const char * path) {
   ogg_page p;
   sz len, at = 0, n = 0, got;
-  u8 * b = slurp(path, &len);
+  blr_file * input = bf_open(path, 0);
+  u8 * b = xmalloc(OGG_HDRMIN + OGG_MAXSEG + OGG_MAXSEG * OGG_MAXSEG);
   u8 * img = xmalloc(OGG_HDRMIN + OGG_MAXSEG + OGG_MAXSEG * OGG_MAXSEG);
+  len = input->len;
   printf("%s: %lu bytes\n", path, (unsigned long) len);
   while (at < len) {
     const u8 * body;
-    got = ogg_parse(&p, b + at, len - at);
+    got = ogg_read(input, at, &p, b);
     FATAL_UNLESS(got != 0, "%s: no Ogg page at %lu", path, (unsigned long) at);
-    body = b + at + OGG_HDRMIN + p.nseg;
+    body = b + OGG_HDRMIN + p.nseg;
     printf("  page %-5lu type %02x  granule %08lx%08lx  serial %08lx  seq %-6lu"
            "  %3d seg  %3d pkt  %6lu B  %s\n", (unsigned long) n, p.type,
            (unsigned long) p.ghi, (unsigned long) p.glo, (unsigned long) p.serial,
            (unsigned long) p.seq, p.nseg, p.np, (unsigned long) got,
-           ogg_emit(&p, img, body) == got && !memcmp(img, b + at, got)
+           ogg_emit(&p, img, body) == got && !memcmp(img, b, got)
              ? "reframes" : "REFRAME MISMATCH");
     at += got;  n++;
   }
-  free(img);  free(b);
+  free(img);  free(b);  bf_close(input);
 }
 
 /*  Read up to `max` bytes; return -1 if open fails.  */
@@ -411,13 +416,15 @@ static char * winquote(const char * s) {
 static void pool_spawn(pool * p, const char * in, const char * out,
                        const vb_opt * o, const effort * e) {
   char * qin = winquote(in), * qout = winquote(out), * qself = winquote(p->self);
-  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 16);
+  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 40);
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   BOOL ok;
   if (p->jobs > MAXIMUM_WAIT_OBJECTS) p->jobs = MAXIMUM_WAIT_OBJECTS;
   while (p->live >= p->jobs) pool_reap(p);
-  sprintf(cmd, "%s %s -- %s %s %s", qself, p->lev, p->enc ? "e" : "d", qin, qout);
+  sprintf(cmd, "%s %s %s -- %s %s %s", qself, p->lev,
+          blr_progress_enabled ? "--progress-lines" : "",
+          p->enc ? "e" : "d", qin, qout);
   memset(&si, 0, sizeof si);
   si.cb = sizeof si;
   ok = CreateProcessA(p->self, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
@@ -522,6 +529,8 @@ int main(int argc, char ** argv) {
     { 'v', no_argument, "version" },
     { 'b', no_argument, "batch" },
     { 'j', required_argument, "jobs" },
+    { 'p', no_argument, "progress" },
+    { 256, no_argument, "progress-lines" },
     { '1', no_argument, NULL }, { '2', no_argument, NULL },
     { '3', no_argument, NULL }, { '4', no_argument, NULL },
     { '5', no_argument, NULL }, { '6', no_argument, NULL },
@@ -558,6 +567,8 @@ int main(int argc, char ** argv) {
     if (c == 'h') { yarg_destroy(r);  usage(stdout);  return BLR_EXIT_OK; }
     if (c == 'v') { yarg_destroy(r);  version();  return BLR_EXIT_OK; }
     if (c == 'b') batch = 1;
+    if (c == 'p') blr_progress_enabled = 1;
+    if (c == 256) blr_progress_enabled = 2;
     if (c == 'j') {
       if (!parse_jobs(r->args[i].arg, &jobs)) {
         fprintf(stderr, "balrogg: --jobs requires a positive count\n");
@@ -580,6 +591,7 @@ int main(int argc, char ** argv) {
 
   /*  Free parsed arguments through one exit path.  */
   if (batch) {
+    if (blr_progress_enabled) blr_progress_enabled = 2;
     if (np < 1 || (strcmp(verb, "e") && strcmp(verb, "d")))
       { usage(stderr);  rc = BLR_EXIT_USAGE; }
     else {
