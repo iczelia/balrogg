@@ -126,6 +126,20 @@ static void t_opus(void) {
 }
 
 void xt_run_files(void) {
+  {
+    const char * in = xt_fixture(xt_data, "chain3.ogg");
+    const char * arc = xt_tmp("reset.blr"), * out = xt_tmp("reset.out");
+    vb_opt o;
+    int i;
+    xt_section_begin("non-solid model reset");
+    Fi(2,
+      vb_opt_default(&o);
+      o.flags = (u8) (i ? 0x61 : 0);  /*  32/16 slots, no solid history  */
+      o.dd = o.df = 1;
+      vb_pack(in, arc, &o);  vb_unpack(arc, out);
+      CHECK(xt_same_file(in, out), "sparse model pages reset between links (%d)", i));
+    xt_unlink(arc);  xt_unlink(out);
+  }
   t_vorbis();
   t_opus();
 }

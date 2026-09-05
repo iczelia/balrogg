@@ -23,6 +23,83 @@
 
 static xt_rng rng;
 
+/* Cross file-window boundaries, revisit flushed data, then resume appending.
+   This also exercises the backward writes used by the Opus carry chain. */
+static void t_file_windows(void) {
+  const char * path = xt_tmp("window.bin"), * path2 = xt_tmp("window-copy.bin");
+  blr_file * f = bf_open(path, 1), * copy = bf_open(path2, 1);
+  sz n = 3 * BLR_IO_CHUNK + 17, i;
+  u8 * expected = xmalloc(n + 1), * actual = xmalloc(n + 1);
+  static const sz marks[] = { 0, BLR_IO_CHUNK - 1, BLR_IO_CHUNK,
+                              2 * BLR_IO_CHUNK + 1 };
+  int bad = 0;
+  xt_section_begin("file windows");
+  Fi(n, expected[i] = (u8) (i * 29 + i / 251));
+  bf_write(f, 0, expected, n);
+  Fi(sizeof marks / sizeof *marks,
+    sz at = marks[i];
+    expected[at] ^= 0xA7;
+    bf_write(f, at, expected + at, 1));
+  /* Force the cached window backwards before append. */
+  CHECK(bf_get(f, 0) == expected[0], "backward read after overwrite");
+  expected[n] = 0x37;  bf_put(f, expected[n]);
+  bf_copy(copy, f, 0, n + 1);
+  bf_read(copy, 0, actual, n + 1);
+  CHECK(!memcmp(actual, expected, n + 1), "file windows preserve overwrite and append");
+  for (i = n + 1; i > 0; i -= MIN(i, (sz) 7919)) {
+    sz at = i - MIN(i, (sz) 7919);
+    if (bf_get(f, at) != expected[at]) bad = 1;
+  }
+  CHECK(!bad, "reverse reads across windows");
+  bf_resize(f, n + 1 + 4096);
+  bf_move(f, 4096, 0, n + 1);
+  bf_read(f, 4096, actual, n + 1);
+  CHECK(!memcmp(actual, expected, n + 1), "overlapping backwards expansion");
+  bf_move(f, 0, 4096, n + 1); bf_resize(f, n + 1);
+  bf_read(f, 0, actual, n + 1);
+  CHECK(f->len == n + 1 && !memcmp(actual, expected, n + 1),
+        "overlapping forward compaction and truncation");
+  bf_close(f);  bf_close(copy);  free(expected);  free(actual);
+  xt_unlink(path); xt_unlink(path2);
+}
+
+/* Interleave several streams, including a control stream that finishes last.
+   Verify reads straddling chunks and lossless container parse/re-emission. */
+static void t_chunks(void) {
+  const char * path = xt_tmp("chunks.blr"), * path2 = xt_tmp("chunks-copy.blr");
+  blr_file * output = bf_open(path, 1), * st[3], * input;
+  archive a, b, c;
+  u8 * data = xmalloc(BLR_IO_CHUNK + 257), * got = xmalloc(BLR_IO_CHUNK + 257);
+  u8 * img, * re;
+  sz i, n, rn;
+  int ok;
+  xt_section_begin("interleaved archive chunks");
+  Fi(BLR_IO_CHUNK + 257, data[i] = (u8) (i * 71 + i / 113));
+  arc_init(&a, 0x09); arc_begin(&a, output);
+  Fi(3, st[i] = arc_newstream(&a));
+  bf_write(st[2], 0, data, BLR_IO_CHUNK + 257);
+  bf_write(st[1], 0, data, BLR_IO_CHUNK + 17);
+  bf_write(st[2], st[2]->len, data, BLR_IO_CHUNK);
+  bf_write(st[0], 0, data, 19);
+  arc_finish(&a); n = output->len;
+  CHECK(arc_size(&a) == n, "chunk framing size accounting");
+  arc_free(&a); bf_close(output);
+  input = bf_open(path, 0); arc_read(&b, input);
+  CHECK(b.version == ARC_VER && b.n == 3 && b.s[2].len == 2 * BLR_IO_CHUNK + 257,
+        "chunk parser restores logical stream lengths");
+  bf_read(b.s[1].file, 0, got, BLR_IO_CHUNK + 17);
+  ok = !memcmp(got, data, BLR_IO_CHUNK + 17);
+  bf_read(b.s[2].file, BLR_IO_CHUNK + 257, got, BLR_IO_CHUNK);
+  CHECK(ok && !memcmp(got, data, BLR_IO_CHUNK),
+        "logical reads span physically interleaved chunks");
+  arc_write(&b, path2);
+  CHECK(xt_same_file(path, path2), "chunk file writer preserves physical layout");
+  img = slurp(path, &n); arc_parse(&c, img, n); re = arc_emit(&c, &rn);
+  CHECK(n == rn && !memcmp(img, re, n), "chunk layout re-emits byte for byte");
+  free(re); arc_free(&c); free(img); arc_free(&b); bf_close(input);
+  free(data); free(got); xt_unlink(path); xt_unlink(path2);
+}
+
 static void t_ilog(void) {
   static const u32 v[] = { 0, 1, 2, 3, 4, 7, 8, 255, 256, 0x7FFFFFFFUL,
                            0x80000000UL, 0xFFFFFFFFUL };
@@ -119,26 +196,6 @@ static void t_coder_ad(void) {
   rc_enc_free(&e);  free(bit);  free(slot);
 }
 
-static void t_varint(void) {
-  static const u32 edge[] = { 0, 1, 0x3F, 0x40, 0x3FFF, 0x4000, 0x3FFFFF,
-                              0x400000, 0x3FFFFFFFUL };
-  u8 b[ARC_VARINT_MAX];
-  sz i, pos, n;
-  int bad = 0;
-  xt_section_begin("varint");
-  Fi(sizeof edge / sizeof *edge,
-    n = arc_varint_put(b, edge[i]);  pos = 0;
-    if (n != arc_varint_len(edge[i]) || arc_varint_get(b, n, &pos) != edge[i]
-        || pos != n) bad++);
-  Fi(200000,
-    u32 v = xt_next(&rng, 0x40000000UL);
-    n = arc_varint_put(b, v);  pos = 0;
-    if (arc_varint_get(b, n, &pos) != v || pos != n) bad++);
-  CHECK(!bad, "%d values failed to round-trip", bad);
-  CHECK(arc_varint_len(0) == 1 && arc_varint_len(0x3FFFFFFFUL) == 4,
-        "varint widths");
-}
-
 static void t_container(void) {
   archive a, b2;
   u8 * img, * blob;
@@ -156,11 +213,26 @@ static void t_container(void) {
     if (b2.n != a.n || b2.flags != a.flags || b2.ntune != a.ntune
         || memcmp(b2.tune, a.tune, a.ntune)) bad++;
     else
-      Fk(a.n, if (b2.s[k].len != a.s[k].len
-                  || memcmp(b2.s[k].data, a.s[k].data, a.s[k].len)) bad++);
+      Fk(a.n,
+        u8 * got = xmalloc(b2.s[k].len);
+        bf_read(b2.s[k].file, 0, got, b2.s[k].len);
+        if (b2.s[k].len != a.s[k].len || memcmp(got, a.s[k].data, a.s[k].len)) bad++;
+        free(got));
     { u8 * img2 = arc_emit(&b2, &len2);
       if (len2 != len || memcmp(img, img2, len)) bad++;
       free(img2); }
+    {
+      const char * path = xt_tmp("container.blr");
+      blr_file * file;
+      archive streamed;
+      u8 * image;
+      arc_write(&a, path);
+      file = bf_open(path, 0);
+      arc_read(&streamed, file);
+      image = arc_emit(&streamed, &len2);
+      if (len2 != len || memcmp(img, image, len)) bad++;
+      free(image);  arc_free(&streamed);  bf_close(file);  xt_unlink(path);
+    }
     arc_free(&a);  arc_free(&b2);  free(img);
   }
   free(blob);
@@ -299,8 +371,9 @@ void xt_run_unit(void) {
   t_short_init();
   t_coder();
   t_coder_ad();
-  t_varint();
   t_container();
+  t_file_windows();
+  t_chunks();
   t_model();
 #if defined(HAVE_SSE2)
   t_kernels();

@@ -16,6 +16,7 @@
 
 #include "t_harness.h"
 #include "ogg.h"
+#include "archive.h"
 
 static const char * const REGRESS[] = {
   "d01-codeword-length-238.blr", "d02-decode-oom.blr", "d03-decode-oom.blr",
@@ -151,8 +152,9 @@ static void t_batch(void) {
     CHECK(!strcmp(xt_batch_name(0, blr[i]), copy[i]),
           "batch names round-trip: %s", copy[i]);
     b = slurp(src, &n);  spew(copy[i], b, n);  free(b));
-  sprintf(args, "-b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
-  CHECK(xt_run(args, log) == 0, "batch encode");
+  sprintf(args, "--progress -b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
+  CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "100%"),
+        "batch encode propagates progress to workers");
   Fi(3, if (xt_file_size(blr[i]) <= 0) ok = 0);
   CHECK(ok, "batch encode wrote every .blr");
   Fi(3, xt_unlink(copy[i]));
@@ -184,6 +186,142 @@ static void t_batch(void) {
   CHECK(xt_run(args, log) == BLR_EXIT_REFUSED
         && xt_file_before(log, large, small), "batch starts larger files first");
   xt_unlink(small);  xt_unlink(large);  xt_unlink(log);
+}
+
+/*  Peeling and padding are legal Vorbis packet boundaries, including in the
+    middle of a page. Later packets must retain identical adaptive state.  */
+static void t_packet_edges(void) {
+  const char * input = xt_tmp("edges.ogg"), * arc = xt_tmp("edges.blr");
+  const char * out = xt_tmp("edges.out"), * log = xt_tmp("edges.log");
+  char args[8192];
+  int variant, lev;
+  xt_section_begin("Vorbis packet boundaries");
+  for (variant = 0; variant < 7; variant++) {
+    sz len, at = 0, got = 0, off = 0, oldlen = 0, newlen, bodylen, pglen;
+    u8 * b = slurp(xt_fixture(xt_data, variant == 6 ? "silence.ogg"
+                                                   : "noise_pink.ogg"), &len);
+    u8 * body, * image;
+    const u8 * src;
+    ogg_page p;
+    int j, found = 0;
+    while (at < len && !found) {
+      got = ogg_parse(&p, b + at, len - at);
+      if (!got) break;
+      src = b + at + OGG_HDRMIN + p.nseg;
+      off = 0;
+      for (j = 0; j < p.np; j++) {
+        if (!p.tail && !(p.type & 1) && j > 0 && j + 1 < p.np &&
+            p.plen[j] >= (variant == 6 ? 1U : 16U) && !(src[off] & 1)) {
+          oldlen = p.plen[j];  found = 1;  break;
+        }
+        off += p.plen[j];
+      }
+      if (!found) at += got;
+    }
+    CHECK(found, "packet boundary fixture %d has a suitable packet", variant);
+    if (!found) { free(b);  continue; }
+    newlen = variant == 0 ? 1 : variant == 1 ? 2 : variant == 2 ? oldlen / 2
+               : variant == 3 ? oldlen - 1 : variant == 6 ? oldlen : oldlen + 3;
+    src = b + at + OGG_HDRMIN + p.nseg;
+    bodylen = p.blen - oldlen + newlen;
+    body = xcalloc(bodylen, 1);
+    memcpy(body, src, off);
+    memcpy(body + off, src + off, MIN(oldlen, newlen));
+    if (variant == 5) memset(body + off + oldlen, 0xA5, 3);
+    if (variant == 6) body[off + newlen - 1] |= 0x80;
+    memcpy(body + off + newlen, src + off + oldlen, p.blen - off - oldlen);
+    p.plen[j] = (u32) newlen;
+    ogg_pack(&p);
+    image = xmalloc(len + OGG_HDRMIN + OGG_MAXSEG + bodylen);
+    memcpy(image, b, at);
+    pglen = ogg_emit(&p, image + at, body);
+    memcpy(image + at + pglen, b + at + got, len - at - got);
+    spew(input, image, len - got + pglen);
+    free(image);  free(body);  free(b);
+    for (lev = 1; lev <= 9; lev += 8) {
+      int ok;
+      sprintf(args, "-%d e \"%s\" \"%s\"", lev, input, arc);
+      ok = xt_run(args, log) == 0;
+      CHECK(ok, "packet variant %d encodes at -%d", variant, lev);
+      if (!ok) continue;
+      sprintf(args, "d \"%s\" \"%s\"", arc, out);
+      CHECK(xt_run(args, log) == 0 && xt_same_file(input, out),
+            "packet variant %d is lossless at -%d", variant, lev);
+      { sz n;  u8 * a = slurp(arc, &n);
+        CHECK(n >= ARC_HDRLEN && a[ARC_MAGLEN] == ARC_VER,
+              "packet variant %d declares the current archive version", variant);
+        free(a); }
+    }
+  }
+  xt_unlink(input);  xt_unlink(arc);  xt_unlink(out);  xt_unlink(log);
+}
+
+static void t_progress(void) {
+  const char * input = xt_tmp("sample.ogg"), * arc = xt_tmp("sample.blr");
+  const char * arc2 = xt_tmp("sample2.blr"), * out = xt_tmp("sample.out");
+  const char * log = xt_tmp("progress.log");
+  const char * fx = xt_fixture(xt_data, "noise_pink.ogg");
+  char args[8192];
+  sz len, copies, i;
+  u8 * b = slurp(fx, &len), * joined;
+  xt_section_begin("progress and full-file tuning");
+  copies = (3UL << 20) / len + 1;
+  joined = xmalloc(copies * len);
+  Fi(copies, memcpy(joined + i * len, b, len));
+  spew(input, joined, copies * len);
+  free(joined);  free(b);
+  sprintf(args, "--progress -5 e \"%s\" \"%s\"", input, arc);
+  CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "tuning 3/3")
+        && xt_file_contains(log, "100%"),
+        "large-file tuning reports all trials");
+  sprintf(args, "--progress d \"%s\" \"%s\"", arc, out);
+  CHECK(xt_run(args, log) == 0 && xt_same_file(input, out)
+        && xt_file_contains(log, "decoding [") && xt_file_contains(log, "100%"),
+        "full-file tuning preserves all links and decoding reports progress");
+  sprintf(args, "-1 e \"%s\" \"%s\"", fx, arc);
+  CHECK(xt_run(args, log) == 0 && !xt_file_contains(log, "encoding ["),
+        "progress is opt-in");
+  sprintf(args, "-p -1 e \"%s\" \"%s\"", fx, arc2);
+  CHECK(xt_run(args, log) == 0 && xt_same_file(arc, arc2),
+        "progress does not change archive bytes");
+  if (has_opus) {
+    fx = xt_fixture(xt_data, "silk_speech_12k.opus");
+    sprintf(args, "--progress -1 e \"%s\" \"%s\"", fx, arc);
+    CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "encoding [")
+          && xt_file_contains(log, "100%"), "Opus encoding progress");
+    sprintf(args, "--progress d \"%s\" \"%s\"", arc, out);
+    CHECK(xt_run(args, log) == 0 && xt_same_file(fx, out)
+          && xt_file_contains(log, "100%"), "Opus decoding progress");
+  }
+  xt_unlink(input);  xt_unlink(arc);  xt_unlink(arc2);  xt_unlink(out);  xt_unlink(log);
+}
+
+static void t_archive_version(void) {
+  const char * arc = xt_tmp("cli.blr"), * bad = xt_tmp("cli2.blr");
+  const char * out = xt_tmp("cli.out"), * log = xt_tmp("cli.log");
+  char args[8192];
+  static const int versions[] = { 0, 1, 2, ARC_VER + 1, 255 };
+  int codec, v, j;
+  xt_section_begin("archive version gate");
+  for (codec = 0; codec <= has_opus; codec++) {
+    const char * input = xt_fixture(xt_data, codec ? "silk_speech_12k.opus" : "tiny.ogg");
+    sz n; u8 * data;
+    sprintf(args, "-1 e \"%s\" \"%s\"", input, arc);
+    CHECK(xt_run(args, log) == 0, "codec %d writes current format", codec);
+    data = slurp(arc, &n);
+    CHECK(n >= ARC_HDRLEN && data[ARC_MAGLEN] == ARC_VER,
+          "codec %d uses the shared version knob", codec);
+    for (j = 0; j < (int) (sizeof versions / sizeof *versions); j++) {
+      v = versions[j];
+      data[ARC_MAGLEN] = (u8) v; spew(bad, data, n);
+      sprintf(args, "d \"%s\" \"%s\"", bad, out);
+      CHECK(xt_run(args, log) == BLR_EXIT_REFUSED &&
+            xt_file_contains(log, "unsupported archive version"),
+            "codec %d rejects version %d", codec, v);
+    }
+    free(data);
+  }
+  xt_unlink(arc); xt_unlink(bad); xt_unlink(out); xt_unlink(log);
 }
 
 static void t_regress(void) {
@@ -347,7 +485,51 @@ static void t_constructed(void) {
   sprintf(args, "d \"%s\" \"%s\"", arc, out);
   CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
         "a chain with merged header pages round-trips");
-  free(o.b);  free(b);
+  free(o.b);
+
+  /*  A padded audio packet spans a full page, followed by a zero- or one-byte
+      closing fragment and ordinary audio. Exercise both continuation forms.  */
+  {
+    int extra;
+    for (extra = 0; extra <= 1; extra++) {
+      int inserted = 0;
+      u8 * pad = xcalloc(OGG_MAXSEG * OGG_MAXSEG, 1);
+      u8 * body = xmalloc(OGG_MAXSEG * OGG_MAXSEG);
+      o.b = NULL;  o.n = o.cap = 0;
+      for (at = 0; at < n; at += got) {
+        const u8 * src;
+        got = ogg_parse(&p, b + at, n - at);
+        if (!got) break;
+        src = b + at + OGG_HDRMIN + p.nseg;
+        if (!inserted && p.np && !(src[0] & 1)) {
+          ogg_page first = p;
+          int j;
+          memcpy(pad, src, p.plen[0]);
+          first.type = 0;  first.glo = first.ghi = (u32) -1;
+          first.np = 1;  first.plen[0] = OGG_MAXSEG * OGG_MAXSEG;
+          first.tail = 1;
+          ob_page(&o, &first, pad);
+          for (j = p.np; j > 0; j--) p.plen[j] = p.plen[j - 1];
+          p.plen[0] = (u32) extra;  p.np++;  p.type |= 1;
+          body[0] = 0;
+          memcpy(body + extra, src, p.blen);
+          src = body;
+          inserted = 1;
+        }
+        if (inserted) p.seq++;
+        ob_page(&o, &p, src);
+      }
+      spew(in, o.b, o.n);
+      sprintf(args, "-5 e \"%s\" \"%s\"", in, arc);
+      CHECK(inserted && xt_run(args, log) == 0,
+            "padded continuation with %d-byte closure encodes", extra);
+      sprintf(args, "d \"%s\" \"%s\"", arc, out);
+      CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
+            "padded continuation with %d-byte closure is lossless", extra);
+      free(o.b);  free(body);  free(pad);
+    }
+  }
+  free(b);
   xt_unlink(log);  xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
 }
 
@@ -363,4 +545,7 @@ void xt_run_cli(void) {
   t_damaged();
   t_constructed();
   t_regress();
+  t_packet_edges();
+  t_progress();
+  t_archive_version();
 }
