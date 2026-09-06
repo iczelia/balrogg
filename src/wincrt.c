@@ -12,20 +12,30 @@
     You should have received a copy of the GNU General Public License
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
-/*  A freestanding C runtime for the Windows 95 build.  */
+/*  A freestanding C runtime for native x86 Windows builds.  */
 
-#if !defined(BLR_WIN_LEGACY)
-#error "win95crt.c requires --with-windows-target=win95"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+
+#if !defined(BLR_WIN_CRT)
+#error "wincrt.c requires the native Windows runtime"
 #endif
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
 #include "common.h"
+#include "win32.h"
 
 #include <errno.h>
 #include <limits.h>
 #include <stdarg.h>
+#include <wchar.h>
+#ifdef BLR_PROFILE
+#include <direct.h>
+#include <math.h>
+#endif
 
 #pragma GCC diagnostic ignored "-Wattributes"
 
@@ -41,7 +51,8 @@ KEEP void * malloc(size_t n) {
 
 KEEP void * calloc(size_t n, size_t size) {
   if (n && size > (size_t) -1 / n) return NULL;
-  return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, n && size ? n * size : 1);
+  return HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY,
+                    n && size ? n * size : 1);
 }
 
 KEEP void * realloc(void * p, size_t n) {
@@ -56,7 +67,8 @@ KEEP void free(void * p) {
 /*  Memory and strings.  */
 KEEP void * memcpy(void * d, const void * s, size_t n) {
   void * out = d;
-  __asm__ volatile ("cld\n\trep movsb" : "+D" (d), "+S" (s), "+c" (n) : : "memory");
+  __asm__ volatile ("cld\n\trep movsb"
+                    : "+D" (d), "+S" (s), "+c" (n) : : "memory");
   return out;
 }
 
@@ -65,25 +77,30 @@ KEEP void * memmove(void * d, const void * s, size_t n) {
   if (!n) return out;
   if ((const unsigned char *) d < (const unsigned char *) s ||
       (const unsigned char *) d >= (const unsigned char *) s + n) {
-    __asm__ volatile ("cld\n\trep movsb" : "+D" (d), "+S" (s), "+c" (n) : : "memory");
+    __asm__ volatile ("cld\n\trep movsb"
+                      : "+D" (d), "+S" (s), "+c" (n) : : "memory");
   } else {
     d = (unsigned char *) d + n - 1;
     s = (const unsigned char *) s + n - 1;
-    __asm__ volatile ("std\n\trep movsb\n\tcld" : "+D" (d), "+S" (s), "+c" (n) : : "memory");
+    __asm__ volatile ("std\n\trep movsb\n\tcld"
+                      : "+D" (d), "+S" (s), "+c" (n) : : "memory");
   }
   return out;
 }
 
 KEEP void * memset(void * d, int c, size_t n) {
   void * out = d;
-  __asm__ volatile ("cld\n\trep stosb" : "+D" (d), "+c" (n) : "a" ((unsigned char) c) : "memory");
+  __asm__ volatile ("cld\n\trep stosb"
+                    : "+D" (d), "+c" (n)
+                    : "a" ((unsigned char) c) : "memory");
   return out;
 }
 
 KEEP int memcmp(const void * a, const void * b, size_t n) {
   const unsigned char * x = a, * y = b;
   if (!n) return 0;
-  __asm__ volatile ("cld\n\trepe cmpsb" : "+S" (x), "+D" (y), "+c" (n) : : "memory", "cc");
+  __asm__ volatile ("cld\n\trepe cmpsb"
+                    : "+S" (x), "+D" (y), "+c" (n) : : "memory", "cc");
   return (int) x[-1] - (int) y[-1];
 }
 
@@ -100,7 +117,8 @@ KEEP void * memchr(const void * s, int c, size_t n) {
 KEEP size_t strlen(const char * s) {
   const char * p = s;
   size_t n = (size_t) -1;
-  __asm__ volatile ("cld\n\trepne scasb" : "+D" (p), "+c" (n) : "a" (0) : "memory", "cc");
+  __asm__ volatile ("cld\n\trepne scasb"
+                    : "+D" (p), "+c" (n) : "a" (0) : "memory", "cc");
   return ~n - 1;
 }
 
@@ -144,18 +162,94 @@ KEEP char * strstr(const char * h, const char * n) {
   return NULL;
 }
 
+KEEP size_t wcslen(const wchar_t * s) {
+  const wchar_t * p = s;
+  size_t n = (size_t) -1;
+  __asm__ volatile ("cld\n\trepne scasw"
+                    : "+D" (p), "+c" (n) : "a" (0) : "memory", "cc");
+  return ~n - 1;
+}
+
+KEEP int wcscmp(const wchar_t * a, const wchar_t * b) {
+  int r;
+  __asm__ volatile ("cld\n"
+                    "1:\tlodsw\n\tscasw\n\tjne 2f\n"
+                    "\ttestw %%ax, %%ax\n\tjne 1b\n"
+                    "\txorl %%eax, %%eax\n\tjmp 3f\n"
+                    "2:\tsbbl %%eax, %%eax\n\torl $1, %%eax\n"
+                    "3:"
+                    : "=&a" (r), "+S" (a), "+D" (b) : : "memory", "cc");
+  return r;
+}
+
+KEEP wchar_t * wcschr(const wchar_t * s, wchar_t c) {
+  wchar_t v;
+  __asm__ volatile ("cld\n"
+                    "1:\tlodsw\n\tcmpw %w2, %%ax\n\tje 2f\n"
+                    "\ttestw %%ax, %%ax\n\tjne 1b\n"
+                    "2:"
+                    : "=&a" (v), "+&S" (s) : "r" (c) : "memory", "cc");
+  return v == c ? (wchar_t *) s - 1 : NULL;
+}
+
+KEEP wchar_t * wcsrchr(const wchar_t * s, wchar_t c) {
+  const wchar_t * r;
+  wchar_t v;
+  __asm__ volatile ("cld\n\tmov $0, %0\n"
+                    "1:\tlodsw\n\tcmpw %w3, %%ax\n\tjne 2f\n"
+                    "\tlea -2(%1), %0\n"
+                    "2:\ttestw %%ax, %%ax\n\tjne 1b"
+                    : "=&r" (r), "+&S" (s), "=&a" (v)
+                    : "r" (c) : "memory", "cc");
+  return (wchar_t *) r;
+}
+
 static int blr_errno;
 
 KEEP int * _errno(void) { return &blr_errno; }
 
-/*  stdio.  Reads go straight to the handle; writes are buffered and the
-    error flag is sticky.  The FILE the headers name is never dereferenced
-    outside this file.  */
+#ifdef BLR_PROFILE
+static void (* exit_fn[32])(void);
+static unsigned exit_n;
+
+KEEP int atexit(void (* fn)(void)) {
+  if (exit_n == 32) return -1;
+  exit_fn[exit_n++] = fn;
+  return 0;
+}
+
+KEEP int _mkdir(const char * path) {
+  BOOL ok;
+#ifdef BLR_WIN_LEGACY
+  ok = CreateDirectoryA(path, NULL);
+#else
+  wchar_t * w = blr_win_path(path);
+  if (!w) { errno = EINVAL;  return -1; }
+  ok = CreateDirectoryW(w, NULL);
+  { DWORD error = GetLastError();  free(w);  SetLastError(error); }
+#endif
+  if (ok) return 0;
+  errno = GetLastError() == ERROR_ALREADY_EXISTS ? EEXIST : EIO;
+  return -1;
+}
+
+KEEP double log(double x) {
+  double y;
+  __asm__ volatile ("fldln2\n\tfldl %1\n\tfyl2x\n\tfstpl %0"
+                    : "=m" (y) : "m" (x) : "st", "st(1)");
+  return y;
+}
+#endif
+
 typedef struct {
   HANDLE h;
   unsigned char * buf;
   size_t n, cap;
   int err, owned;
+#if !defined(BLR_WIN_LEGACY)
+  int console, need;
+  u32 point, min;
+#endif
 } bfile;
 
 #define BFILE(f) ((bfile *) (void *) (f))
@@ -164,7 +258,9 @@ static bfile std_files[3];
 static int std_ready;
 
 static void std_init(void) {
-  static const DWORD which[3] = { STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE };
+  static const DWORD which[3] = {
+    STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, STD_ERROR_HANDLE
+  };
   int i;
   if (std_ready) return;
   std_ready = 1;
@@ -173,6 +269,11 @@ static void std_init(void) {
     std_files[i].buf = NULL;  std_files[i].n = 0;
     std_files[i].cap = i == 1 ? 4096 : 0;  /*  stdout buffered, stderr not  */
     std_files[i].err = 0;  std_files[i].owned = 0);
+#if !defined(BLR_WIN_LEGACY)
+  Fi(3,
+    DWORD mode;
+    std_files[i].console = GetConsoleMode(std_files[i].h, &mode) != 0);
+#endif
 }
 
 KEEP FILE * __acrt_iob_func(unsigned i) {
@@ -180,13 +281,69 @@ KEEP FILE * __acrt_iob_func(unsigned i) {
   return (FILE *) (void *) &std_files[i < 3 ? i : 2];
 }
 
+#if !defined(BLR_WIN_LEGACY)
+static int console_units(bfile * f, const wchar_t * p, DWORD n) {
+  while (n) {
+    DWORD got;
+    if (!WriteConsoleW(f->h, p, n, &got, NULL) || !got) {
+      f->err = 1;  return 0;
+    }
+    p += got;  n -= got;
+  }
+  return 1;
+}
+
+static int console_write(bfile * f, const unsigned char * p, size_t n) {
+  wchar_t out[512];
+  size_t used = 0;
+  while (n) {
+    u32 cp;
+    unsigned b = *p;
+    if (f->need) {
+      if ((b & 0xC0) == 0x80) {
+        p++;  n--;
+        f->point = (f->point << 6) | (b & 63);
+        if (--f->need) continue;
+        cp = f->point;
+        if (cp < f->min || cp > 0x10FFFF ||
+            (cp >= 0xD800 && cp <= 0xDFFF)) cp = 0xFFFD;
+      } else { f->need = 0;  cp = 0xFFFD; }
+    } else {
+      p++;  n--;
+      if (b < 0x80) cp = b;
+      else if (b >= 0xC2 && b <= 0xF4) {
+        f->need = b < 0xE0 ? 1 : b < 0xF0 ? 2 : 3;
+        f->min = f->need == 1 ? 0x80 : f->need == 2 ? 0x800 : 0x10000;
+        f->point = b & (0x7F >> f->need);
+        continue;
+      } else cp = 0xFFFD;
+    }
+    if (cp >= 0x10000) {
+      cp -= 0x10000;
+      out[used++] = (wchar_t) (0xD800 | (cp >> 10));
+      out[used++] = (wchar_t) (0xDC00 | (cp & 1023));
+    } else out[used++] = (wchar_t) cp;
+    if (used >= 510) {
+      if (!console_units(f, out, (DWORD) used)) return 0;
+      used = 0;
+    }
+  }
+  return console_units(f, out, (DWORD) used);
+}
+#endif
+
 static int raw_write(bfile * f, const void * p, size_t n) {
   const unsigned char * b = p;
   DWORD got;
+#if !defined(BLR_WIN_LEGACY)
+  if (f->console) return console_write(f, b, n);
+#endif
   while (n) {
     DWORD want = n > 0x40000000 ? 0x40000000 : (DWORD) n;
     if (f->h == INVALID_HANDLE_VALUE || !f->h ||
-        !WriteFile(f->h, b, want, &got, NULL) || !got) { f->err = 1;  return 0; }
+        !WriteFile(f->h, b, want, &got, NULL) || !got) {
+      f->err = 1;  return 0;
+    }
     b += got;  n -= got;
   }
   return 1;
@@ -198,9 +355,22 @@ static int flush(bfile * f) {
   return ok;
 }
 
+static int flush_final(bfile * f) {
+  int ok = flush(f);
+#if !defined(BLR_WIN_LEGACY)
+  if (f->console && f->need) {
+    wchar_t replacement = 0xFFFD;
+    f->need = 0;
+    if (!console_units(f, &replacement, 1)) ok = 0;
+  }
+#endif
+  return ok;
+}
+
 static size_t put(bfile * f, const void * p, size_t n) {
   if (!f->cap) return raw_write(f, p, n) ? n : 0;
   if (!f->buf) f->buf = malloc(f->cap);
+  if (!f->buf) { f->err = 1;  return 0; }
   if (f->n + n > f->cap && !flush(f)) return 0;
   if (n >= f->cap) return raw_write(f, p, n) ? n : 0;
   memcpy(f->buf + f->n, p, n);  f->n += n;
@@ -209,22 +379,26 @@ static size_t put(bfile * f, const void * p, size_t n) {
 
 KEEP FILE * fopen(const char * path, const char * mode) {
   int wr = mode[0] == 'w';
-  HANDLE h = CreateFileA(path, wr ? GENERIC_WRITE : GENERIC_READ,
-                         wr ? 0 : FILE_SHARE_READ, NULL,
-                         wr ? CREATE_ALWAYS : OPEN_EXISTING,
-                         FILE_ATTRIBUTE_NORMAL, NULL);
+  HANDLE h = blr_win_open(path, wr ? GENERIC_WRITE : GENERIC_READ,
+                          wr ? 0 : FILE_SHARE_READ,
+                          wr ? CREATE_ALWAYS : OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL);
   bfile * f;
   if (h == INVALID_HANDLE_VALUE) return NULL;
-  f = malloc(sizeof *f);
+  f = calloc(1, sizeof *f);
   if (!f) { CloseHandle(h);  return NULL; }
   f->h = h;  f->buf = NULL;  f->n = 0;  f->cap = wr ? 65536 : 0;
   f->err = 0;  f->owned = 1;
+#if !defined(BLR_WIN_LEGACY)
+  { DWORD console_mode;
+    f->console = GetConsoleMode(h, &console_mode) != 0; }
+#endif
   return (FILE *) (void *) f;
 }
 
 KEEP int fclose(FILE * fp) {
   bfile * f = BFILE(fp);
-  int bad = !flush(f) || f->err;
+  int bad = !flush_final(f) || f->err;
   if (!CloseHandle(f->h)) bad = 1;
   free(f->buf);
   if (f->owned) free(f);
@@ -268,8 +442,13 @@ KEEP int puts(const char * s) {
 }
 
 KEEP int fflush(FILE * fp) {
-  if (!fp) { std_init();  return flush(&std_files[1]) ? 0 : EOF; }
-  return flush(BFILE(fp)) ? 0 : EOF;
+  if (!fp) {
+    int a, b;
+    std_init();
+    a = flush_final(&std_files[1]);  b = flush_final(&std_files[2]);
+    return a && b ? 0 : EOF;
+  }
+  return flush_final(BFILE(fp)) ? 0 : EOF;
 }
 
 KEEP int ferror(FILE * fp) { return BFILE(fp)->err; }
@@ -320,22 +499,55 @@ static int format(sink * k, const char * fmt, va_list ap) {
       int w = va_arg(ap, int);
       if (w < 0) { left = 1;  w = -w; }
       width = (size_t) w;  fmt++;
-    } else while (*fmt >= '0' && *fmt <= '9') width = width * 10 + (size_t) (*fmt++ - '0');
+    } else while (*fmt >= '0' && *fmt <= '9')
+      width = width * 10 + (size_t) (*fmt++ - '0');
     if (*fmt == '.') {
       fmt++;  prec = 0;
       if (*fmt == '*') { prec = va_arg(ap, int);  fmt++; }
       else while (*fmt >= '0' && *fmt <= '9') prec = prec * 10 + (*fmt++ - '0');
     }
-    while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' || *fmt == 'j' || *fmt == 't') {
+    while (*fmt == 'h' || *fmt == 'l' || *fmt == 'z' ||
+           *fmt == 'j' || *fmt == 't') {
       if (*fmt == 'l') len++;
       else if (*fmt == 'h') len--;
-      else if (*fmt == 'z' || *fmt == 't') len = 1;
+      else if (*fmt == 'z' || *fmt == 't') len = 3;
       else len = 2;
       fmt++;
     }
     switch (*fmt) {
+#ifdef BLR_PROFILE
+    case 'f': {
+      double x = va_arg(ap, double);
+      unsigned long long whole, frac, scale = 1;
+      char fixed[48], * p = fixed + sizeof fixed;
+      int j, places = prec < 0 ? 6 : prec;
+      if (places > 9) places = 9;
+      neg = x < 0;
+      if (neg) x = -x;
+      if (!(x >= 0) || x >= 18446744073709551616.0) {
+        text = x != x ? "nan" : "inf";  body = 3;  goto string;
+      }
+      for (j = 0; j < places; j++) scale *= 10;
+      whole = (unsigned long long) x;
+      frac = (unsigned long long) ((x - (double) whole) * scale + 0.5);
+      if (frac == scale) { whole++;  frac = 0; }
+      for (j = 0; j < places; j++) {
+        *--p = (char) ('0' + frac % 10);  frac /= 10;
+      }
+      if (places || alt) *--p = '.';
+      do { *--p = (char) ('0' + whole % 10);  whole /= 10; } while (whole);
+      if (neg || plus || space) *--p = neg ? '-' : plus ? '+' : ' ';
+      body = (size_t) (fixed + sizeof fixed - p);
+      if (!left && width > body) pad(k, zero ? '0' : ' ', width - body);
+      emit(k, p, body);
+      if (left && width > body) pad(k, ' ', width - body);
+      fmt++;
+      continue;
+    }
+#endif
     case '%': emit(k, "%", 1);  fmt++;  continue;
-    case 'c': num[0] = (char) va_arg(ap, int);  text = num;  body = 1;  goto string;
+    case 'c':
+      num[0] = (char) va_arg(ap, int);  text = num;  body = 1;  goto string;
     case 's':
       text = va_arg(ap, const char *);
       if (!text) text = "(null)";
@@ -347,9 +559,13 @@ static int format(sink * k, const char * fmt, va_list ap) {
       if (left && width > body) pad(k, ' ', width - body);
       fmt++;
       continue;
-    case 'p': v = (unsigned long long) (uintptr_t) va_arg(ap, void *);  base = 16;  alt = 1;  break;
+    case 'p':
+      v = (unsigned long long) (uintptr_t) va_arg(ap, void *);
+      base = 16;  alt = 1;  break;
     case 'd': case 'i': {
-      long long x = len >= 2 ? va_arg(ap, long long) : len == 1 ? va_arg(ap, long)
+      long long x = len == 3 ? (long long) va_arg(ap, intptr_t)
+                    : len == 2 ? va_arg(ap, long long)
+                    : len == 1 ? va_arg(ap, long)
                     : va_arg(ap, int);
       if (len == -1) x = (short) x;
       if (len <= -2) x = (signed char) x;
@@ -362,7 +578,9 @@ static int format(sink * k, const char * fmt, va_list ap) {
     case 'o': base = 8;   /*  fall through  */
     case 'u':
     unsigned_arg:
-      v = len >= 2 ? va_arg(ap, unsigned long long) : len == 1 ? va_arg(ap, unsigned long)
+      v = len == 3 ? (unsigned long long) va_arg(ap, size_t)
+          : len == 2 ? va_arg(ap, unsigned long long)
+          : len == 1 ? va_arg(ap, unsigned long)
           : va_arg(ap, unsigned);
       if (len == -1) v = (unsigned short) v;
       if (len <= -2) v = (unsigned char) v;
@@ -378,14 +596,16 @@ static int format(sink * k, const char * fmt, va_list ap) {
     if (v || prec != 0) {
       do {
         unsigned d = (unsigned) (v % base);
-        num[sizeof num - 1 - digits++] = (char) (d < 10 ? '0' + d : (upper ? 'A' : 'a') + d - 10);
+        num[sizeof num - 1 - digits++] =
+          (char) (d < 10 ? '0' + d : (upper ? 'A' : 'a') + d - 10);
         v /= base;
       } while (v && digits < sizeof num - 4);
     }
     body = digits;
     if (prec > 0 && (size_t) prec > body) body = (size_t) prec;
     total = body + (neg || plus || space ? 1 : 0) + (alt && base == 16 ? 2 : 0);
-    if (!left && !(zero && prec < 0) && width > total) pad(k, ' ', width - total);
+    if (!left && !(zero && prec < 0) && width > total)
+      pad(k, ' ', width - total);
     if (neg) emit(k, "-", 1);
     else if (plus) emit(k, "+", 1);
     else if (space) emit(k, " ", 1);
@@ -414,8 +634,10 @@ KEEP int __mingw_vsprintf(char * s, const char * fmt, va_list ap) {
 
 KEEP int __mingw_vfprintf(FILE * fp, const char * fmt, va_list ap) {
   sink k;
+  int n;
   k.s = NULL;  k.cap = 0;  k.n = 0;  k.f = BFILE(fp);
-  return format(&k, fmt, ap);
+  n = format(&k, fmt, ap);
+  return k.f->err ? -1 : n;
 }
 
 KEEP int __mingw_vprintf(const char * fmt, va_list ap) {
@@ -459,7 +681,8 @@ KEEP unsigned long strtoul(const char * s, char ** end, int base) {
   while (*p == ' ' || (*p >= '\t' && *p <= '\r')) p++;
   if (*p == '+' || *p == '-') neg = *p++ == '-';
   if ((base == 0 || base == 16) && p[0] == '0' && (p[1] == 'x' || p[1] == 'X')
-      && ((p[2] >= '0' && p[2] <= '9') || ((p[2] | 32) >= 'a' && (p[2] | 32) <= 'f')))
+      && ((p[2] >= '0' && p[2] <= '9') ||
+          ((p[2] | 32) >= 'a' && (p[2] | 32) <= 'f')))
     { p += 2;  base = 16; }
   if (base == 0) base = p[0] == '0' ? 8 : 10;
   start = p;
@@ -471,7 +694,9 @@ KEEP unsigned long strtoul(const char * s, char ** end, int base) {
     else break;
     if (d >= base) break;
     any = 1;
-    if (over || v > cut || (v == cut && (unsigned) d > lim)) { over = 1;  continue; }
+    if (over || v > cut || (v == cut && (unsigned) d > lim)) {
+      over = 1;  continue;
+    }
     v = v * (unsigned long) base + (unsigned long) d;
   }
   if (end) *end = (char *) (any ? p : s);
@@ -491,7 +716,8 @@ KEEP void qsort(void * base, size_t n, size_t size,
   if (n < 2) return;
   for (i = n / 2; i-- > 0;) {
     for (root = i; (child = 2 * root + 1) < n; root = child) {
-      if (child + 1 < n && cmp(b + child * size, b + (child + 1) * size) < 0) child++;
+      if (child + 1 < n && cmp(b + child * size, b + (child + 1) * size) < 0)
+        child++;
       if (cmp(b + root * size, b + child * size) >= 0) break;
       swap_bytes(b + root * size, b + child * size, size);
     }
@@ -499,15 +725,16 @@ KEEP void qsort(void * base, size_t n, size_t size,
   for (i = n - 1; i > 0; i--) {
     swap_bytes(b, b + i * size, size);
     for (root = 0; (child = 2 * root + 1) < i; root = child) {
-      if (child + 1 < i && cmp(b + child * size, b + (child + 1) * size) < 0) child++;
+      if (child + 1 < i && cmp(b + child * size, b + (child + 1) * size) < 0)
+        child++;
       if (cmp(b + root * size, b + child * size) >= 0) break;
       swap_bytes(b + root * size, b + child * size, size);
     }
   }
 }
 
-/*  Two rotating buffers keep the results of two getenv calls valid at once.  */
 KEEP char * getenv(const char * name) {
+#if defined(BLR_WIN_LEGACY)
   static char slots[2][1024];
   static int next;
   char * s = slots[next];
@@ -515,17 +742,37 @@ KEEP char * getenv(const char * name) {
   if (!n || n >= sizeof slots[0]) return NULL;
   next ^= 1;
   return s;
+#else
+  static char * slots[2];
+  static int next;
+  wchar_t * key = blr_win_wide(name), * value;
+  char * s;
+  DWORD need, got;
+  if (!key) return NULL;
+  need = GetEnvironmentVariableW(key, NULL, 0);
+  if (!need) { free(key);  return NULL; }
+  value = malloc((sz) need * sizeof *value);
+  if (!value) { free(key);  return NULL; }
+  got = GetEnvironmentVariableW(key, value, need);
+  free(key);
+  if (!got || got >= need) { free(value);  return NULL; }
+  s = blr_win_utf8(value);  free(value);
+  if (!s) return NULL;
+  free(slots[next]);  slots[next] = s;  next ^= 1;
+  return s;
+#endif
 }
 
 KEEP NORETURN void exit(int code) {
+#ifdef BLR_PROFILE
+  while (exit_n) exit_fn[--exit_n]();
+#endif
   std_init();
-  flush(&std_files[1]);
-  flush(&std_files[2]);
+  flush_final(&std_files[1]);
+  flush_final(&std_files[2]);
   ExitProcess((UINT) code);
 }
 
-/*  Entry: split the command line the way the Microsoft runtime does, run
-    the program, and exit through the flushing path.  */
 static int split(const char * cmd, char *** out) {
   char * buf = malloc(strlen(cmd) + 2), * w = buf;
   char ** argv;
@@ -534,7 +781,6 @@ static int split(const char * cmd, char *** out) {
   if (!buf) return -1;
   argv = malloc((size_t) cap * sizeof *argv);
   if (!argv) return -1;
-  /*  argv[0]: whitespace-delimited unless quoted; no escapes.  */
   argv[argc++] = w;
   if (*p == '"') { p++;  while (*p && *p != '"') *w++ = *p++;  if (*p) p++; }
   else while (*p && *p != ' ' && *p != '\t') *w++ = *p++;
@@ -572,7 +818,17 @@ static int split(const char * cmd, char *** out) {
 
 KEEP NORETURN void __cdecl blr_entry(void) {
   char ** argv;
+#if defined(BLR_WIN_LEGACY)
   int argc = split(GetCommandLineA(), &argv);
+#else
+  char * cmd = blr_win_utf8(GetCommandLineW());
+  int argc;
+  if (!cmd) ExitProcess(BLR_EXIT_INTERNAL);
+  argc = split(cmd, &argv);
+  free(cmd);
+  SetConsoleOutputCP(CP_UTF8);
+  SetConsoleCP(CP_UTF8);
+#endif
   if (argc < 0) ExitProcess(BLR_EXIT_INTERNAL);
   exit(blr_main(argc, argv));
 }

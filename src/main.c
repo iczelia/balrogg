@@ -18,11 +18,10 @@
 #include "archive.h"
 #include "ogg.h"
 #include "vorbis.h"
-#include "prof.h"
-#include "rc.h"
 #include "yarg.h"
 #include "opusmode.h"
 #include "cpu.h"
+#include "win32.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -39,8 +38,8 @@
 #include <sys/wait.h>
 #endif
 
-/*  The Windows 95 runtime calls blr_main from its own entry point.  */
-#if defined(BLR_WIN_LEGACY)
+/*  The native Windows runtime calls blr_main from its own entry point.  */
+#if defined(BLR_WIN_CRT)
 int blr_main(int argc, char ** argv);
 #define main blr_main
 #endif
@@ -182,11 +181,11 @@ static int same_file(const char * a, const char * b) {
   HANDLE ha, hb;
   int same = 0;
   if (!strcmp(a, b)) return 1;
-  ha = CreateFileA(a, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                   OPEN_EXISTING, 0, NULL);
+  ha = blr_win_open(a, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    OPEN_EXISTING, 0);
   if (ha == INVALID_HANDLE_VALUE) return 0;
-  hb = CreateFileA(b, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                   OPEN_EXISTING, 0, NULL);
+  hb = blr_win_open(b, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                    OPEN_EXISTING, 0);
   if (hb != INVALID_HANDLE_VALUE) {
     if (GetFileInformationByHandle(ha, &x) && GetFileInformationByHandle(hb, &y))
       same = x.dwVolumeSerialNumber == y.dwVolumeSerialNumber
@@ -200,16 +199,18 @@ static int same_file(const char * a, const char * b) {
 
 /*  The size of a regular file, or zero.  */
 static bytes_t file_size(const char * path) {
-  DWORD lo, hi = 0, attr = GetFileAttributesA(path);
+  DWORD lo, hi = 0, error, attr = blr_win_attrs(path);
   HANDLE h;
   if (attr == INVALID_FILE_ATTRIBUTES || (attr & FILE_ATTRIBUTE_DIRECTORY))
     return 0;
-  h = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, NULL,
-                  OPEN_EXISTING, 0, NULL);
+  h = blr_win_open(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
+                   OPEN_EXISTING, 0);
   if (h == INVALID_HANDLE_VALUE) return 0;
+  SetLastError(NO_ERROR);
   lo = GetFileSize(h, &hi);
+  error = GetLastError();
   CloseHandle(h);
-  if (lo == INVALID_FILE_SIZE && GetLastError() != NO_ERROR) return 0;
+  if (lo == INVALID_FILE_SIZE && error != NO_ERROR) return 0;
   return ((bytes_t) hi << 32) | lo;
 }
 
@@ -417,7 +418,6 @@ static void pool_spawn(pool * p, const char * in, const char * out,
                        const vb_opt * o, const effort * e) {
   char * qin = winquote(in), * qout = winquote(out), * qself = winquote(p->self);
   char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 40);
-  STARTUPINFOA si;
   PROCESS_INFORMATION pi;
   BOOL ok;
   if (p->jobs > MAXIMUM_WAIT_OBJECTS) p->jobs = MAXIMUM_WAIT_OBJECTS;
@@ -425,9 +425,7 @@ static void pool_spawn(pool * p, const char * in, const char * out,
   sprintf(cmd, "%s %s %s -- %s %s %s", qself, p->lev,
           blr_progress_enabled ? "--progress-lines" : "",
           p->enc ? "e" : "d", qin, qout);
-  memset(&si, 0, sizeof si);
-  si.cb = sizeof si;
-  ok = CreateProcessA(p->self, cmd, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi);
+  ok = blr_win_spawn(p->self, cmd, &pi);
   free(qin);  free(qout);  free(qself);  free(cmd);
   if (!ok) {                    /*  cannot spawn: run it here instead  */
     pool_failed(p, do_one(p->enc, in, out, o, e));
@@ -598,11 +596,13 @@ int main(int argc, char ** argv) {
       const char * self = argv[0];
 #if defined(BLR_WIN32)
       /*  argv[0] is whatever the shell typed; children need the image.  */
-      char image[MAX_PATH];
-      DWORD got = GetModuleFileNameA(NULL, image, sizeof image);
-      if (got > 0 && got < sizeof image) self = image;
+      char * image = blr_win_image();
+      if (image) self = image;
 #endif
       rc = do_batch(!strcmp(verb, "e"), self, lev, r, &o, e, jobs);
+#if defined(BLR_WIN32)
+      free(image);
+#endif
     }
   }
   else if (!strcmp(verb, "dump") && np == 1) dump(in);

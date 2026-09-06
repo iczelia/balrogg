@@ -299,10 +299,19 @@ jobs:
                       CC=${{ matrix.host }}-gcc LDFLAGS=-static
 
       - name: Make
-        run: make -j4 all
+        run: |
+          make -j4 all
+          make -j4 balrogg_prof.exe
+          make windows-check
 
       - name: Test suite
         run: VERBOSE=1 make -j4 check
+
+      - name: Unicode paths and arguments
+        run: |
+          python contrib/check-win-unicode.py \
+            "$(cygpath -w "$PWD/balrogg.exe")" \
+            "$(cygpath -w "$PWD/tests/data")"
 
       - name: Show the test logs
         if: failure()
@@ -356,12 +365,10 @@ jobs:
       - name: Make
         run: make -j4 all
 
-      #  Audit the Win95 PE headers and imports; `file` is diagnostic only.
-      - name: Verify the PE image is a Win95-era binary
-        if: ${{ matrix.target.name == 'i686-win95' }}
+      - name: Audit the Windows runtime and PE image
         run: |
           file balrogg.exe
-          make win95-check
+          make windows-check
 
       - name: Split debug information
         run: |
@@ -370,12 +377,10 @@ jobs:
           "$objcopy" --only-keep-debug balrogg.exe balrogg.dbg
           "$strip" --strip-all balrogg.exe
           "$objcopy" --add-gnu-debuglink=balrogg.dbg balrogg.exe
-          if test '${{ matrix.target.name }}' = i686-win95; then
-            OBJDUMP=${{ matrix.target.host }}-objdump \
-            NM=${{ matrix.target.host }}-nm \
-              /bin/bash contrib/check-win95-pe.sh \
-              balrogg.exe config.h balrogg.dbg
-          fi
+          OBJDUMP=${{ matrix.target.host }}-objdump \
+          NM=${{ matrix.target.host }}-nm \
+            /bin/bash contrib/check-win-pe.sh \
+            balrogg.exe config.h balrogg.dbg
 
       - name: Upload the binary
         uses: actions/upload-artifact@v7
@@ -448,6 +453,13 @@ jobs:
           chmod +x bin/balrogg.exe
           bin=`cd bin && pwd`/balrogg.exe
           VERBOSE=1 make -j4 check BLR_TEST_BINARY="$bin"
+
+      - name: Unicode paths and arguments
+        if: ${{ matrix.name != 'i686-win95' }}
+        run: |
+          python contrib/check-win-unicode.py \
+            "$(cygpath -w "$PWD/bin/balrogg.exe")" \
+            "$(cygpath -w "$PWD/tests/data")"
 
       - name: Show the test logs
         if: failure()

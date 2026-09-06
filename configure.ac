@@ -13,7 +13,7 @@ dnl  You should have received a copy of the GNU General Public License
 dnl  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 m4_define([balrogg_version_major], [1])
-m4_define([balrogg_version_minor], [1])
+m4_define([balrogg_version_minor], [2])
 m4_define([balrogg_version], [balrogg_version_major.balrogg_version_minor])
 
 AC_PREREQ([2.69])
@@ -77,7 +77,7 @@ AC_SUBST([BLR_DOS_CFLAGS])
 AC_SUBST([BLR_DOS_LDFLAGS])
 
 case "$host_os" in
-  mingw*|cygwin*|msys*) blr_is_windows=yes ;;
+  mingw*)               blr_is_windows=yes ;;
   *)                    blr_is_windows=no  ;;
 esac
 AM_CONDITIONAL([BLR_IS_WINDOWS], [test "x$blr_is_windows" = "xyes"])
@@ -85,8 +85,6 @@ if test "x$blr_is_windows" = "xyes"; then
   AC_DEFINE([BLR_WIN32], [1], [Define on Win32 hosts])
 fi
 
-dnl  The win95 target links a freestanding C runtime on KERNEL32 alone, so
-dnl  the image loads on Windows 95 and runs on an i486.
 AC_ARG_WITH([windows-target],
   [AS_HELP_STRING([--with-windows-target=@<:@nt|win95@:>@],
     [select the native Windows API and loader baseline (default: nt)])],
@@ -103,8 +101,6 @@ case "$blr_win_target" in
   win95)
     blr_win_cppflags="-D_WIN32_WINNT=0x0400 -DWINVER=0x0400"
     blr_win_cppflags="$blr_win_cppflags -DBLR_WIN_LEGACY=1"
-    dnl  The C library is local, so nothing may be declared dllimport.
-    blr_win_cppflags="$blr_win_cppflags -D_CRTIMP="
     AC_DEFINE([BLR_WIN_LEGACY], [1],
               [Define for the Windows 95 API and loader baseline])
     blr_win_cflags="-march=i486 -mtune=i486 -mfpmath=387"
@@ -128,6 +124,7 @@ esac
 BLR_WIN_CPPFLAGS=""
 BLR_WIN_CFLAGS=""
 BLR_WIN_LDFLAGS=""
+BLR_WIN_ENTRY=""
 if test "x$blr_is_windows" = "xyes"; then
   if test "x$blr_win_target" = "xwin95"; then
     case "$host_cpu" in
@@ -135,7 +132,21 @@ if test "x$blr_is_windows" = "xyes"; then
       *) AC_MSG_ERROR([the win95 target requires a 32-bit x86 host]) ;;
     esac
   fi
-  BLR_WIN_CPPFLAGS="$blr_win_cppflags"
+  case "$host_cpu" in
+    i?86)
+      BLR_WIN_ENTRY="_blr_entry"
+      if test "x$blr_win_target" = "xnt"; then
+        blr_win_cflags="-march=i686 -mtune=generic -mfpmath=387"
+      fi
+      ;;
+    x86_64*|amd64*)
+      BLR_WIN_ENTRY="blr_entry"
+      blr_win_cflags="-march=x86-64 -mtune=generic"
+      ;;
+    *) AC_MSG_ERROR([the native Windows runtime supports i686 and x86_64]) ;;
+  esac
+  AC_DEFINE([BLR_WIN_CRT], [1], [Use the freestanding native Windows runtime])
+  BLR_WIN_CPPFLAGS="$blr_win_cppflags -D_CRTIMP= -D__USE_MINGW_ANSI_STDIO=1"
   BLR_WIN_CFLAGS="$blr_win_cflags"
   BLR_WIN_LDFLAGS="$blr_win_ldflags"
 elif test "x$with_windows_target" != "x"; then
@@ -146,6 +157,7 @@ fi
 AC_SUBST([BLR_WIN_CPPFLAGS])
 AC_SUBST([BLR_WIN_CFLAGS])
 AC_SUBST([BLR_WIN_LDFLAGS])
+AC_SUBST([BLR_WIN_ENTRY])
 AM_CONDITIONAL([BLR_WIN_LEGACY], [test "x$blr_win_target" = "xwin95"])
 
 dnl  The SSE2 mixer is compiled on x86 and dispatched at run time.  DOS and

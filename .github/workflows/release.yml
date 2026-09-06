@@ -116,11 +116,10 @@ jobs:
       - name: Make
         run: make -j4 all
 
-      - name: Check the Win95 image
-        if: ${{ matrix.target.name == 'i686-win95' }}
+      - name: Audit the Windows runtime and PE image
         run: |
           file balrogg.exe
-          make win95-check
+          make windows-check
 
       - name: Stage the binary
         run: |
@@ -134,12 +133,10 @@ jobs:
           ( cd output && "$objcopy" \
               --add-gnu-debuglink=balrogg-${{ matrix.target.name }}.dbg \
               balrogg-${{ matrix.target.name }}.exe )
-          if test '${{ matrix.target.name }}' = i686-win95; then
-            OBJDUMP=${{ matrix.target.host }}-objdump \
-            NM=${{ matrix.target.host }}-nm \
-              /bin/bash contrib/check-win95-pe.sh \
-              "$binary" config.h "$debug"
-          fi
+          OBJDUMP=${{ matrix.target.host }}-objdump \
+          NM=${{ matrix.target.host }}-nm \
+            /bin/bash contrib/check-win-pe.sh \
+            "$binary" config.h "$debug"
           cp config.h output/config.h
           ls -l output
 
@@ -213,6 +210,13 @@ jobs:
           binary=`cd target && pwd`/balrogg-${{ matrix.target.name }}.exe
           chmod +x "$binary"
           VERBOSE=1 make -j4 check BLR_TEST_BINARY="$binary"
+
+      - name: Unicode paths and arguments
+        if: ${{ matrix.target.name != 'i686-win95' }}
+        run: |
+          binary="$PWD/target/balrogg-${{ matrix.target.name }}.exe"
+          python contrib/check-win-unicode.py "$(cygpath -w "$binary")" \
+            "$(cygpath -w "$PWD/tests/data")"
 
       - name: Show the test logs
         if: failure()

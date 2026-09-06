@@ -13,6 +13,7 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "file.h"
+#include "win32.h"
 #ifdef BLR_WIN32
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
@@ -48,9 +49,11 @@ static blr_file * new_file(void * handle, int write, sz len) {
 
 blr_file * bf_open(const char * path, int write) {
 #ifdef BLR_WIN32
-  HANDLE h = CreateFileA(path, write ? GENERIC_WRITE | GENERIC_READ : GENERIC_READ,
-                         write ? 0 : FILE_SHARE_READ, NULL,
-                         write ? CREATE_ALWAYS : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL);
+  HANDLE h = blr_win_open(path,
+                          write ? GENERIC_WRITE | GENERIC_READ : GENERIC_READ,
+                          write ? 0 : FILE_SHARE_READ,
+                          write ? CREATE_ALWAYS : OPEN_EXISTING,
+                          FILE_ATTRIBUTE_NORMAL);
   DWORD hi = 0, lo;
   unsigned long long len;
   if (h == INVALID_HANDLE_VALUE) FATAL_CODE(BLR_EXIT_IO, "cannot %s %s", write ? "create" : "open", path);

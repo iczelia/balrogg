@@ -25,7 +25,7 @@ dist_man1_MANS = balrogg.1
 noinst_HEADERS = \
   src/common.h src/file.h src/rc.h src/model.h src/cm.h src/archive.h src/ogg.h \
   src/vorbis.h src/codec.h src/opusmode.h src/opusent.h src/prof.h \
-  src/cpu.h src/yarg.h \
+  src/cpu.h src/yarg.h src/win32.h \
   src/opus/opusdec.h src/opus/celt.h src/opus/silk.h src/opus/arch.h \
   src/opus/opus_types.h src/opus/opus_defines.h src/opus/os_support.h \
   src/opus/ecintrin.h src/opus/entcode.h src/opus/entdec.h \
@@ -37,6 +37,9 @@ noinst_LIBRARIES = libbalrogg_core.a
 libbalrogg_core_a_SOURCES = \
   src/common.c src/file.c src/rc.c src/archive.c src/model.c src/ogg.c src/vorbis.c \
   src/codec.c src/cm.c src/cmmix.c src/cpu.c
+if BLR_IS_WINDOWS
+libbalrogg_core_a_SOURCES += src/win32.c
+endif
 
 balrogg_SOURCES = src/main.c
 balrogg_CFLAGS = $(AM_CFLAGS)
@@ -51,11 +54,11 @@ libbalrogg_sse2_a_CFLAGS   = $(AM_CFLAGS) $(BLR_SSE2_CFLAGS)
 balrogg_LDADD += libbalrogg_sse2.a
 endif
 
-##  Windows 95: a freestanding C runtime on KERNEL32 replaces MSVCRT.
-if BLR_WIN_LEGACY
-balrogg_SOURCES += src/win95crt.c
+##  Native Windows: a freestanding C runtime on KERNEL32 replaces MSVCRT/UCRT.
+if BLR_IS_WINDOWS
+balrogg_SOURCES += src/wincrt.c
 balrogg_CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
-balrogg_LDFLAGS += -nostartfiles -nodefaultlibs -Wl,-e,_blr_entry \
+balrogg_LDFLAGS += -nostartfiles -nodefaultlibs -Wl,-e,$(BLR_WIN_ENTRY) \
                    -static -static-libgcc -Wl,--subsystem,console
 balrogg_LDADD += -lgcc -lkernel32
 endif
@@ -89,7 +92,16 @@ EXTRA_PROGRAMS = balrogg_prof
 balrogg_prof_SOURCES  = src/main.c src/prof.c $(libbalrogg_core_a_SOURCES) \
                         src/opusmode.c $(BLR_OPUS_SOURCES)
 balrogg_prof_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_PROFILE $(BLR_OPUS_CPPFLAGS)
+balrogg_prof_CFLAGS   = $(AM_CFLAGS)
+if BLR_IS_WINDOWS
+balrogg_prof_SOURCES += src/wincrt.c
+balrogg_prof_CFLAGS  += -fno-builtin -fno-tree-loop-distribute-patterns
+balrogg_prof_LDFLAGS  = $(balrogg_LDFLAGS)
+balrogg_prof_LDADD    = -lgcc -lkernel32
+else
+balrogg_prof_LDFLAGS  = $(AM_LDFLAGS)
 balrogg_prof_LDADD    = -lm
+endif
 if BLR_SSE2
 noinst_LIBRARIES += libbalrogg_prof_sse2.a
 libbalrogg_prof_sse2_a_SOURCES  = src/cmmix.c
@@ -110,7 +122,17 @@ if BLR_SSE2
 tests_t_suite_LDADD += libbalrogg_sse2.a
 endif
 
-test-programs: tests/t_suite$(EXEEXT)
+if BLR_IS_WINDOWS
+check_PROGRAMS += tests/t_wincrt
+TESTS += tests/t_wincrt
+tests_t_wincrt_SOURCES = tests/t_wincrt.c src/wincrt.c src/win32.c
+tests_t_wincrt_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_PROFILE
+tests_t_wincrt_CFLAGS = $(balrogg_CFLAGS)
+tests_t_wincrt_LDFLAGS = $(balrogg_LDFLAGS)
+tests_t_wincrt_LDADD = -lgcc -lkernel32
+endif
+
+test-programs: $(check_PROGRAMS)
 
 ##  Override with `make check BLR_TEST_TIMEOUT_SECONDS=60`.
 LOG_COMPILER = $(BLR_TIMEOUT_PROG) $(BLR_TEST_TIMEOUT_SECONDS)
@@ -138,14 +160,15 @@ EXTRA_DIST = \
   fuzz/triage.sh fuzz/regress.sh fuzz/mkseeds.py fuzz/mutate.py \
   contrib/mkdata.sh contrib/normalize-ogg.py contrib/corpus-rt.sh \
   contrib/gitlog-to-changelog contrib/check-win95-pe.sh \
+  contrib/check-win-pe.sh contrib/check-win-unicode.py \
   contrib/dos/fdauto.bat contrib/dos/fdconfig.sys \
   contrib/dos/install-freedos.sh contrib/dos/qemu-exit.c \
   contrib/dos/run-suite.sh
 
 VENDORED = src/yarg.h src/opus
 
-.PHONY: check-full check-torture check-simd win95-check print-distfiles \
-        test-programs
+.PHONY: check-full check-torture check-simd win95-check windows-check \
+        print-distfiles test-programs
 
 ##  Full tests also scan BLR_TEST_CORPUS.
 check-full:
@@ -165,7 +188,10 @@ check-simd: balrogg$(EXEEXT)
 	  BLR_SIMD=$$t $(MAKE) check || exit 1; \
 	done
 
-##  Audit a --with-windows-target=win95 image's PE headers and imports.
+##  Audit a native Windows image's entry point, PE headers, and imports.
+windows-check: balrogg$(EXEEXT)
+	OBJDUMP=$(OBJDUMP) NM=$(NM) $(SHELL) \
+	  $(top_srcdir)/contrib/check-win-pe.sh ./balrogg$(EXEEXT) ./config.h
 win95-check: balrogg$(EXEEXT)
 	OBJDUMP=$(OBJDUMP) NM=$(NM) $(SHELL) \
 	  $(top_srcdir)/contrib/check-win95-pe.sh ./balrogg$(EXEEXT) ./config.h
