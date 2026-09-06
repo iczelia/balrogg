@@ -9,6 +9,10 @@ balrogg is licensed under GNU GPL version 3. See [COPYING](COPYING). Report
 issues to Kamila Szewczyk <k@iczelia.net>. The project is hosted at
 <https://github.com/iczelia/balrogg>.
 
+Discussion:
+- [HN - Balrogg: Demonically compacting (up to 15%) lossless Vorbis/Opus recompressor](news.ycombinator.com/item?id=49549778)
+- [FileForums - balrogg: lossless Vorbis/Opus recompressor](https://fileforums.com/showthread.php?p=510887#post510887)
+
 ## Quick start
 
 ```sh
@@ -58,13 +62,6 @@ parameter search, so `-4` through `-9` decode at the same speed.
 Vorbis tuning evaluates the complete file at each selected setting. The best
 candidate is retained in the destination file, with at most the best and current
 candidate present during a trial.
-
-Results for a five-megabyte music file follow.
-
-| Level | Vorbis | Opus |
-| --- | --- | --- |
-| `-1` | 8.3 percent smaller at 6.4 MB/s | 4.0 percent smaller at 4.2 MB/s |
-| `-9` | 9.8 percent smaller at 2.9 MB/s | 4.8 percent smaller at 2.4 MB/s |
 
 ## Caveats
 
