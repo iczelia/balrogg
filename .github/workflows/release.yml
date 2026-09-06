@@ -16,7 +16,6 @@ permissions:
 env:
   #  Manual runs supply the version through the tag input.
   BLR_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
-  UPX_VERSION: "5.0.2"
 
 jobs:
   #  Package once for all release jobs.
@@ -100,18 +99,6 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ${{ matrix.target.packages }}
 
-      - name: Install UPX
-        run: |
-          case "$(uname -m)" in
-            x86_64) arch=amd64 ;;
-            aarch64) arch=arm64 ;;
-          esac
-          dir="upx-$UPX_VERSION-${arch}_linux"
-          curl -fL "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$dir.tar.xz" \
-            | tar -xJ -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/$dir" >> "$GITHUB_PATH"
-          upx --version | head -1
-
       - name: Extract the source package
         run: |
           tar --strip-components=1 -mxf "balrogg-$BLR_VERSION.tar.gz"
@@ -155,11 +142,6 @@ jobs:
           fi
           cp config.h output/config.h
           ls -l output
-
-      - name: Pack the binary with UPX
-        run: |
-          upx --brute -o output/balrogg-${{ matrix.target.name }}-upx.exe output/balrogg-${{ matrix.target.name }}.exe
-          upx -t output/balrogg-${{ matrix.target.name }}-upx.exe
 
       - name: Upload the Windows build
         uses: actions/upload-artifact@v7
@@ -261,18 +243,6 @@ jobs:
           sleep 1
           touch aclocal.m4 configure config.h.in Makefile.in
 
-      - name: Install UPX
-        run: |
-          case "$(uname -m)" in
-            x86_64) arch=amd64 ;;
-            aarch64) arch=arm64 ;;
-          esac
-          dir="upx-$UPX_VERSION-${arch}_linux"
-          curl -fL "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$dir.tar.xz" \
-            | tar -xJ -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/$dir" >> "$GITHUB_PATH"
-          upx --version | head -1
-
       - name: Configure
         run: |
           ./configure --bindir=/ --program-suffix=-linux-${{ matrix.target.name }} \
@@ -309,12 +279,6 @@ jobs:
               balrogg-linux-${{ matrix.target.name }} )
           ls -l output
 
-      - name: Pack the binary with UPX
-        run: |
-          upx --brute -o output/balrogg-linux-${{ matrix.target.name }}-upx output/balrogg-linux-${{ matrix.target.name }}
-          upx -t output/balrogg-linux-${{ matrix.target.name }}-upx
-          output/balrogg-linux-${{ matrix.target.name }}-upx --version
-
       - name: Upload the Linux build
         uses: actions/upload-artifact@v7
         with:
@@ -336,7 +300,6 @@ jobs:
             host: powerpc64le-linux-gnu
             qemu: ppc64le
             libc: ppc64el
-            upx: true
           - arch: riscv64
             host: riscv64-linux-gnu
             qemu: riscv64
@@ -349,7 +312,6 @@ jobs:
             host: arm-linux-gnueabihf
             qemu: arm
             libc: armhf
-            upx: true
     env:
       QEMU: qemu-${{ matrix.target.qemu }}-static
     steps:
@@ -364,19 +326,6 @@ jobs:
           sudo apt-get install -y qemu-user-static \
             gcc-${{ matrix.target.host }} \
             libc6-dev-${{ matrix.target.libc }}-cross
-
-      - name: Install UPX
-        if: matrix.target.upx
-        run: |
-          case "$(uname -m)" in
-            x86_64) arch=amd64 ;;
-            aarch64) arch=arm64 ;;
-          esac
-          dir="upx-$UPX_VERSION-${arch}_linux"
-          curl -fL "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$dir.tar.xz" \
-            | tar -xJ -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/$dir" >> "$GITHUB_PATH"
-          upx --version | head -1
 
       - name: Extract the source package
         run: |
@@ -434,13 +383,6 @@ jobs:
               --add-gnu-debuglink=balrogg-linux-${{ matrix.target.arch }}.dbg \
               balrogg-linux-${{ matrix.target.arch }} )
           ls -l output
-
-      - name: Pack the binary with UPX
-        if: matrix.target.upx
-        run: |
-          upx --brute -o output/balrogg-linux-${{ matrix.target.arch }}-upx output/balrogg-linux-${{ matrix.target.arch }}
-          upx -t output/balrogg-linux-${{ matrix.target.arch }}-upx
-          $QEMU output/balrogg-linux-${{ matrix.target.arch }}-upx --version
 
       - name: Upload the cross-built Linux build
         uses: actions/upload-artifact@v7
@@ -547,18 +489,6 @@ jobs:
           tar -xjf /tmp/djgpp.tar.bz2 -C "$HOME"
           echo "$HOME/djgpp/bin" >> "$GITHUB_PATH"
 
-      - name: Install UPX
-        run: |
-          case "$(uname -m)" in
-            x86_64) arch=amd64 ;;
-            aarch64) arch=arm64 ;;
-          esac
-          dir="upx-$UPX_VERSION-${arch}_linux"
-          curl -fL "https://github.com/upx/upx/releases/download/v$UPX_VERSION/$dir.tar.xz" \
-            | tar -xJ -C "$RUNNER_TEMP"
-          echo "$RUNNER_TEMP/$dir" >> "$GITHUB_PATH"
-          upx --version | head -1
-
       - name: Build for MS-DOS
         run: |
           mkdir build-dos
@@ -594,11 +524,6 @@ jobs:
           ( cd output && i586-pc-msdosdjgpp-objcopy \
               --add-gnu-debuglink=balrogg-dos.dbg balrogg-dos.exe )
           ls -l output
-
-      - name: Pack the binary with UPX
-        run: |
-          upx --brute -o output/balrogg-dos-upx.exe output/balrogg-dos.exe
-          upx -t output/balrogg-dos-upx.exe
 
       - name: Upload the DOS build
         uses: actions/upload-artifact@v7
@@ -640,15 +565,6 @@ jobs:
           cp "artifacts/balrogg-release-macos-x86_64-$BLR_VERSION/balrogg-macos-x86_64" release/
           cp "artifacts/balrogg-release-dos-i386-$BLR_VERSION/balrogg-dos.exe" release/
 
-          cp "artifacts/balrogg-release-win-x86_64-$BLR_VERSION/balrogg-x86_64-upx.exe" release/
-          cp "artifacts/balrogg-release-win-i686-$BLR_VERSION/balrogg-i686-upx.exe" release/
-          cp "artifacts/balrogg-release-win-i686-win95-$BLR_VERSION/balrogg-i686-win95-upx.exe" release/
-          cp "artifacts/balrogg-release-linux-x86_64-$BLR_VERSION/balrogg-linux-x86_64-upx" release/
-          cp "artifacts/balrogg-release-linux-aarch64-$BLR_VERSION/balrogg-linux-aarch64-upx" release/
-          cp "artifacts/balrogg-release-linux-ppc64le-$BLR_VERSION/balrogg-linux-ppc64le-upx" release/
-          cp "artifacts/balrogg-release-linux-armhf-$BLR_VERSION/balrogg-linux-armhf-upx" release/
-          cp "artifacts/balrogg-release-dos-i386-$BLR_VERSION/balrogg-dos-upx.exe" release/
-
           cp artifacts/balrogg-release-win-*-"$BLR_VERSION"/*.dbg debug/
           cp artifacts/balrogg-release-linux-*-"$BLR_VERSION"/*.dbg debug/
           cp artifacts/balrogg-release-dos-i386-"$BLR_VERSION"/*.dbg debug/
@@ -659,9 +575,8 @@ jobs:
           ( cd debug && zip -9 -r \
               "../release/balrogg-$BLR_VERSION-debug-symbols.zip" . )
 
-          #  5 source packages, 12 binaries, 8 UPX-packed binaries, and
-          #  the debug bundle.
-          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 26
+          #  5 source packages, 12 binaries, and the debug bundle.
+          test "$(find release -maxdepth 1 -type f | wc -l)" -eq 18
           ls -l release
 
       - name: Upload the complete release artifact
