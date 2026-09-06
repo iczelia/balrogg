@@ -177,7 +177,6 @@ static INLINE u16 rc_adapt(u16 v, u8 * c, int lim, int bit) {
   if ((int) count < lim) *c = (u8) (count + 1);
   nv = bit ? (i32) v - (i32) ((u32) v * d >> 16)
            : (i32) v + (i32) ((u32) (0xFFFF - v) * d >> 16);
-  if (UNLIKELY((u32) nv - 1 >= 0xFFFE)) nv = nv < 1 ? 1 : 0xFFFE;
   return (u16) nv;
 }
 
