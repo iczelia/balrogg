@@ -1,4 +1,61 @@
+2026-09-06  Kamila Szewczyk  <k@iczelia.net>
+
+	fix windows CI builds
+
+	misc. mechanical stylistic
+
+	support some awkward vorbis files
+
+	src/opus: remove some stuff I don't need
+
+	misc. changes
+
+	rc: simplify hooks; miscellaneous changes.
+
+	better win32 support
+	configure: v1.2
+
+	src/opusmode: misc. perf tweaks
+
+	src/cmmix: tabulate logit cm_squash, OoO for rc_enc_bit_raw
+
+	remove upx builds from the release workflow
+
+2026-09-06  Kamila Szewczyk  <27734421+iczelia@users.noreply.github.com>
+
+	src/file.h: style
+
+2026-09-05  Kamila Szewczyk  <27734421+iczelia@users.noreply.github.com>
+
+	Update README.md
+
+2026-09-05  Kamila Szewczyk  <k@iczelia.net>
+
+	configure: version bump
+
+	floor classword correction
+
+	fix DOS failures
+
+	document new features
+
+	miscellaneous tests for new functionality
+
+	feat: model demand paging, progress indicator, memory use reduction, better Vorbis support.
+
+2026-09-04  Kamila Szewczyk  <k@iczelia.net>
+
+	add INSTALL
+
 2026-09-03  Kamila Szewczyk  <k@iczelia.net>
+
+	update the release procedures
+
+	remove zstd/bz2 tarballs
+
+	i686 binary size fix
+
+	populate the changelog
 
 	update the release procedure
 

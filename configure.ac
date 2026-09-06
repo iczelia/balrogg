@@ -53,7 +53,6 @@ AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h \
                   windows.h process.h])
 AC_CHECK_FUNCS([fork waitpid sysconf setrlimit])
 
-dnl  MS-DOS through DJGPP: one process, 8.3 file names, no SIMD.
 case "$host_os" in
   msdosdjgpp*|djgpp*) blr_is_dos=yes ;;
   *)                  blr_is_dos=no  ;;

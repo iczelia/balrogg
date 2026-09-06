@@ -1,5 +1,26 @@
 Release notes for balrogg. See ChangeLog for source-level changes.
 
+v1.2 (06-09-2026)
+- Accept Vorbis files without a final end-of-stream flag when the last
+  packet is complete.
+- Improve context mixer and Opus entropy coder performance.
+- Support Unicode paths, arguments, long paths, and console output on
+  modern Windows.
+- Archives are incompatible with v1.1.
+
+v1.1 (05-09-2026)
+- Reduce memory use with file-backed, interleaved archive chunks and
+  Vorbis model pages allocated only when used.
+- Evaluate Vorbis tuning candidates over the whole file and retain the
+  best encoded result without an extra encoding pass.
+- Add encoding, decoding, and tuning progress with --progress and
+  --progress-lines, including progress for batch jobs.
+- Support padded and peeled Vorbis packets and alternative floor
+  subclass choices while preserving the original bytes.
+- Support extended Opus frame headers and padding, with packets up to
+  61,440 bytes, including OpusHead and OpusTags.
+- Archives are incompatible with v1.0.
+
 v1.0 (03-09-2026)
 - First release.
 - Lossless Ogg Vorbis recompression with adaptive context models. Levels -5
