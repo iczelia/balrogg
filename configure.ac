@@ -139,7 +139,7 @@ if test "x$blr_is_windows" = "xyes"; then
       ;;
     x86_64*|amd64*)
       BLR_WIN_ENTRY="blr_entry"
-      blr_win_cflags="-march=x86-64 -mtune=generic"
+      blr_win_cflags="-march=x86-64 -mtune=generic -mcmodel=small"
       ;;
     *) AC_MSG_ERROR([the native Windows runtime supports i686 and x86_64]) ;;
   esac

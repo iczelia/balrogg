@@ -1209,7 +1209,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   int psel = 0, memf = 0;
   u32 pslot = 0, phb = 0, phx = 0;
   i32 pv = 0;                 /*  the match model's digit, while it holds  */
-  u32 pm = 0, pnb = 0;
+  u32 pm = 0;
   int mok = 0, mex = -1;
 #ifdef BLR_PROFILE
   int e_sh = n->sh[ch], e_mh = n->mh[0];
@@ -1219,7 +1219,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   mr = n->mem + ((q * AR_NPASS + (pass ? pass - 1 : 0)) * AR_MAXIDX + c)
                * AR_NCH + ch;
   mw = n->mem + ((q * AR_NPASS + pass) * AR_MAXIDX + c) * AR_NCH + ch;
-  m = *mr;  il = blr_ilog(c);
+  m = *mr;
   ax = q;                                       /*  A_RZERO  */
   ax = ax * 2 + (n->psl == b->slot);
   ax = ax * 2 + !(m & 7);
@@ -1241,7 +1241,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
     phb = cm_hpre(pslot, ch, c, (u32) memf);
     phx = cm_hpx(pslot, ch, c, (u32) memf);
     if (n->t.flags & VB_TF_MATCH) mok = cm_match(&n->cm, &pv);
-    if (mok) { pm = (u32) (pv < 0 ? -pv : pv);  pnb = blr_ilog(pm) - 2; }
+    if (mok) pm = (u32) (pv < 0 ? -pv : pv);
   }
   PROF(prof_site = P_RZERO);
   /*  Each stage expects the predicted digit's bit until one disagrees.  */
@@ -1258,7 +1258,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
     if (n->cm_mask) cm_step(n, ch, c, 0);
     return 0;
   }
-  n->fh[ch] = 1;
+  il = blr_ilog(c);  n->fh[ch] = 1;
   if (z->enc) mag = (u32) (v < 0 ? -v : v);
   ax = q;                                       /*  A_RSIGN  */
   ax = ax * 2 + (m != 0);
@@ -1283,7 +1283,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   if (t != (pm == 1)) mok = 0;
   n->sh[ch] = (u8) ((sg + n->sh[ch] * 2) & 3);
   if (t) { n->mh[ch] = 1;  *mw = (u8) ((sg << 7) + 1);  mag = 1; }
-  else {
+  else { u32 pnb = mok ? blr_ilog(pm) - 2 : 0;
     if (z->enc) nb = blr_ilog(mag) - 2;
     FATAL_IF_HOT(z->enc && !(mag >= 2 && nb < AR_MAGB))
       ("vorbis: residue digit %ld exceeds 8 bits", (long) v);
