@@ -3,7 +3,7 @@ Release notes for balrogg. See ChangeLog for source-level changes.
 v1.2 (06-09-2026)
 - Accept Vorbis files without a final end-of-stream flag when the last
   packet is complete.
-- Improve context mixer and Opus entropy coder performance.
+- Improve context mixer, Vorbis and Opus entropy coder performance.
 - Support Unicode paths, arguments, long paths, and console output on
   modern Windows.
 - Archives are incompatible with v1.1.
