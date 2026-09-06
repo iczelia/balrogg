@@ -10,8 +10,8 @@ issues to Kamila Szewczyk <k@iczelia.net>. The project is hosted at
 <https://github.com/iczelia/balrogg>.
 
 Discussion:
-- [HN - Balrogg: Demonically compacting (up to 15%) lossless Vorbis/Opus recompressor](news.ycombinator.com/item?id=49549778)
-- [FileForums - balrogg: lossless Vorbis/Opus recompressor](https://fileforums.com/showthread.php?p=510887#post510887)
+- [HN - Balrogg: Demonically compacting (up to 15%) lossless Vorbis/Opus recompressor](https://news.ycombinator.com/item?id=49549778)
+- [FileForums - balrogg: lossless Vorbis/Opus recompressor](https://fileforums.com/showthread.php?p=510887)
 
 ## Quick start
 
