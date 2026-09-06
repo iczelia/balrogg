@@ -16,6 +16,7 @@
 #ifdef BLR_WIN32
 #include "win32.h"
 #else
+#include <errno.h>
 #include <sys/types.h>
 #include <unistd.h>
 #ifdef BLR_DOS
@@ -268,12 +269,37 @@ void bf_copy(blr_file * to, blr_file * from, sz at, sz n) {
   free(buf);
 }
 
+static void sync_file(blr_file * f) {
+#ifdef BLR_WIN32
+  if (!FlushFileBuffers(f->handle)) {
+    DWORD e = GetLastError();
+    if (e != ERROR_ACCESS_DENIED && e != ERROR_PRIVILEGE_NOT_HELD &&
+        e != ERROR_INVALID_FUNCTION && e != ERROR_NOT_SUPPORTED)
+      FATAL_CODE(BLR_EXIT_IO, "cannot sync file");
+  }
+#else
+  if (fflush((FILE *) f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot flush file");
+#ifdef HAVE_FSYNC
+  { int r;
+    do r = fsync(fileno((FILE *) f->handle));  while (r && errno == EINTR);
+    if (r && errno != EACCES && errno != EPERM && errno != EINVAL && errno != ENOSYS
+#ifdef ENOTSUP
+        && errno != ENOTSUP
+#endif
+       ) FATAL_CODE(BLR_EXIT_IO, "cannot sync file"); }
+#endif
+#endif
+}
+
 void bf_close(blr_file * f) {
   if (!f) return;
   bf_flush(f);  drop_window(f);
   if (f->handle) {
-    if (f->writable && f->disklen != f->len && !size_file(f, f->len))
-      FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
+    if (f->writable) {
+      if (f->disklen != f->len && !size_file(f, f->len))
+        FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
+      sync_file(f);
+    }
 #ifdef BLR_WIN32
     if (!CloseHandle(f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot close file");
 #else

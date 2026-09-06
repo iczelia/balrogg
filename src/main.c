@@ -21,6 +21,7 @@
 #include "yarg.h"
 #include "opusmode.h"
 #include "cpu.h"
+#include "prof.h"
 
 #include <errno.h>
 #include <limits.h>

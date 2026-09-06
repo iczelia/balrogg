@@ -64,7 +64,7 @@ fi
 
 #  Allowed runtime, mapping, batch and profiler imports.
 allowed=' CloseHandle CreateDirectoryA CreateFileA CreateFileMappingA CreateProcessA ExitProcess
-FlushViewOfFile MapViewOfFile UnmapViewOfFile
+FlushFileBuffers FlushViewOfFile MapViewOfFile UnmapViewOfFile
 GetCommandLineA GetEnvironmentVariableA GetExitCodeProcess
 GetFileAttributesA GetFileInformationByHandle GetFileSize GetLastError
 GetModuleFileNameA GetProcessHeap GetStdHandle GetSystemInfo

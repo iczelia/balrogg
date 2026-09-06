@@ -51,7 +51,7 @@ AC_SYS_LARGEFILE
 
 AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h sys/mman.h \
                   windows.h process.h])
-AC_CHECK_FUNCS([fork waitpid sysconf setrlimit mmap munmap msync])
+AC_CHECK_FUNCS([fork waitpid sysconf setrlimit mmap munmap msync fsync])
 AC_ARG_ENABLE([mmap],
   [AS_HELP_STRING([--disable-mmap], [use heap arenas and buffered file I/O])],,
   [enable_mmap=yes])
