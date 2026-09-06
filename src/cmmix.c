@@ -113,9 +113,13 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
                  sg * cm_str16[c->mp[mi]],
                  sg * (int) (c->mlen < 32 ? c->mlen : 32) * 64);
   }
-  pr = (u32) cm_squash((int) (mix_dot(in, w) >> 7));      /*  P(1)  */
+  {
+    int dot = (int) (mix_dot(in, w) >> 7);
+    if (dot < -2047) dot = -2047;
+    if (dot > 2047) dot = 2047;
+    pr = cm_squash16[dot + 2048];                       /*  P(1)  */
+  }
   if (c->d) bit = rc_dec_bit_raw(c->d, 65536u - pr);
-  else rc_enc_bit_raw(c->e, 65536u - pr, bit);
   /*  Account for mixed bits because rc_*_bit_raw does not report them.  */
   PROF(prof_hook(NULL, 65536u - pr, bit));
   *sp = cm_nex[state][bit];
@@ -128,5 +132,6 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
   mix_train(in, w, ((bit << 12) - (int) (pr >> 4)) * c->lr);
   *p = rc_adapt(*p, cnt, c->lim, bit);
   if (exp >= 0) c->mp[mi] = rc_adapt(c->mp[mi], c->mpc + mi, c->lim, bit == exp);
+  if (!c->d) rc_enc_bit_raw(c->e, 65536u - pr, bit);
   return bit;
 }

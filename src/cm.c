@@ -21,6 +21,7 @@
 short cm_str16[65536];
 u8 cm_nex[256][4];
 i8 cm_nexd[256];
+u16 cm_squash16[4096];
 
 const int cm_sqt[33] = {
   1, 2, 3, 6, 10, 16, 27, 45, 73, 120, 194, 310, 488, 747, 1101,
@@ -40,6 +41,7 @@ static void cm_init(void) {
   if (blr_cpu_sse2()) cm_bit = cm_bit_sse2;
 #endif
 
+  for (x = -2048; x < 2048; x++) cm_squash16[x + 2048] = (u16) cm_squash(x);
   for (x = -2047; x <= 2047; x++) {
     i = cm_squash(x);
     for (j = pi; j <= i && j < 65536; j++) cm_str16[j] = (short) x;

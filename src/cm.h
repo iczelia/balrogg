@@ -72,6 +72,7 @@ extern short cm_str16[65536];
 extern u8 cm_nex[256][4];
 extern i8 cm_nexd[256];
 extern const int cm_sqt[33];
+extern u16 cm_squash16[4096];
 
 /*  Exact linear interpolation rearranged to use one multiplication.
       SQT[i]*16*(128 - w) + SQT[i+1]*16*w + 64
