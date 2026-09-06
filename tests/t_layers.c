@@ -163,6 +163,21 @@ static void t_pages(const char * path, parsed * f) {
   ogg_hdr_free(&h);  rc_enc_free(&e);  free(img);
 }
 
+/*  Check every entry, not only the symbols present in audio packets.  */
+static int lookup_quotients(const vb_setup * s) {
+  u32 i, j;
+  Fi(s->nbk,
+    const vb_book * b = s->bk + i;
+    if (b->look != 1) continue;
+    Fj(b->ent,
+      u32 q = (u32) ((uint64_t) j * b->divmul >> b->divshift);
+      if (q != j / b->nv) return 0);
+    /*  The reciprocal also covers the full 24-bit index bound.  */
+    if ((u32) ((uint64_t) 0xFFFFFF * b->divmul >> b->divshift)
+        != 0xFFFFFF / b->nv) return 0);
+  return 1;
+}
+
 /*  Round-trip header packets through their shared models.  */
 static void t_setup(const char * path, parsed * f) {
   vb_ctx v;
@@ -170,7 +185,7 @@ static void t_setup(const char * path, parsed * f) {
   rc_dec d;
   sz olen;
   u8 * img;
-  int i, j, w = 0, bad = 0, np = 0;
+  int i, j, w = 0, bad = 0, np = 0, divbad = 0;
 
   vb_init(&v);  vb_level(&v, CM_NLEV - 1);  rc_enc_init(&e);
   Fi(f->n,
@@ -182,6 +197,7 @@ static void t_setup(const char * path, parsed * f) {
       if (!f->pg[i].skip) {
         if (w >= 3) { CHECK(0, "%s: a link has over three header packets", path);  break; }
         vb_hdr_enc(&v, &e, w, f->pg[i].body + atp, f->pg[i].p.plen[j]);  np++;
+        if (w == 2 && !lookup_quotients(v.cur)) divbad = 1;
       }
       atp += f->pg[i].p.plen[j];  w++));
   olen = rc_enc_finish(&e);
@@ -203,6 +219,7 @@ static void t_setup(const char * path, parsed * f) {
       }
       atp += f->pg[i].p.plen[j];  w++););
   CHECK(!bad, "%s: a header packet on page %d rebuilt wrong", xt_basename(path), bad - 1);
+  CHECK(!divbad, "%s: codebook reciprocal differs from division", xt_basename(path));
   xt_trace("%s: %d header packets -> %lu bytes", xt_basename(path), np,
            (unsigned long) olen);
   vb_free(&v);  rc_enc_free(&e);  free(img);

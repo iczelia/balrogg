@@ -98,9 +98,6 @@ Batch mode returns the highest nonzero status reported by any file.
 ## Performance and portability
 
 Each file uses one thread and requires seekable input and output files.
-Vorbis model pages are allocated only when used, without relying on deferred
-OS allocation.
-
 Supported hosts apply a 2 GiB process memory cap to reject unreasonable
 allocations. Set `BLR_MEMCAP` to another size in MiB, or to `0` to disable the
 cap.

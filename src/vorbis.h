@@ -17,6 +17,7 @@
 
 #include "model.h"
 #include "cm.h"
+#include "map.h"
 
 #define VB_MAXCLASS 16            /*  floor 1 class numbers are 4 bits  */
 #define VB_MAXPART  32            /*  floor 1 partition count is 5 bits  */
@@ -220,7 +221,8 @@ typedef struct {
   vb_slot sl[VB_MAXSLOT];  u32 nsl, ns;
   u8 st[VB_MAXSLOT];          /*  which slots this link has touched  */
 
-  vb_apage ** ar;  sz arn;    /*  model pages allocated only when touched  */
+  vb_apage * ar;  sz arn;     /*  contiguous, demand-zero model pages  */
+  blr_map arena;
   u32 ab[A_NTAB];             /*  each table's base within the arena  */
   u32 aglob, astep;           /*  the shared tables' span, and one slot's  */
 

@@ -21,7 +21,6 @@
 #include "yarg.h"
 #include "opusmode.h"
 #include "cpu.h"
-#include "prof.h"
 
 #include <errno.h>
 #include <limits.h>
@@ -66,6 +65,7 @@ static void usage(FILE * to) {
     "  -j, --jobs=N  process N files at once\n"
     "  -p, --progress show tuning and codec progress on stderr\n"
     "  --progress-lines write progress as separate log lines\n"
+    "  --no-mmap     use heap arenas and buffered file I/O\n"
     "  -h, --help    show help        -v, --version   show version\n"
     "\n"
     "Exit codes  0 success, 1 refused input, 2 usage, 3 I/O error,\n"
@@ -416,13 +416,14 @@ static char * winquote(const char * s) {
 static void pool_spawn(pool * p, const char * in, const char * out,
                        const vb_opt * o, const effort * e) {
   char * qin = winquote(in), * qout = winquote(out), * qself = winquote(p->self);
-  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 40);
+  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 56);
   PROCESS_INFORMATION pi;
   BOOL ok;
   if (p->jobs > MAXIMUM_WAIT_OBJECTS) p->jobs = MAXIMUM_WAIT_OBJECTS;
   while (p->live >= p->jobs) pool_reap(p);
-  sprintf(cmd, "%s %s %s -- %s %s %s", qself, p->lev,
+  sprintf(cmd, "%s %s %s %s -- %s %s %s", qself, p->lev,
           blr_progress_enabled ? "--progress-lines" : "",
+          blr_no_mmap ? "--no-mmap" : "",
           p->enc ? "e" : "d", qin, qout);
   ok = blr_win_spawn(p->self, cmd, &pi);
   free(qin);  free(qout);  free(qself);  free(cmd);
@@ -528,6 +529,7 @@ int main(int argc, char ** argv) {
     { 'j', required_argument, "jobs" },
     { 'p', no_argument, "progress" },
     { 256, no_argument, "progress-lines" },
+    { 257, no_argument, "no-mmap" },
     { '1', no_argument, NULL }, { '2', no_argument, NULL },
     { '3', no_argument, NULL }, { '4', no_argument, NULL },
     { '5', no_argument, NULL }, { '6', no_argument, NULL },
@@ -566,6 +568,7 @@ int main(int argc, char ** argv) {
     if (c == 'b') batch = 1;
     if (c == 'p') blr_progress_enabled = 1;
     if (c == 256) blr_progress_enabled = 2;
+    if (c == 257) blr_no_mmap = 1;
     if (c == 'j') {
       if (!parse_jobs(r->args[i].arg, &jobs)) {
         fprintf(stderr, "balrogg: --jobs requires a positive count\n");

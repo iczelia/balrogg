@@ -26,7 +26,7 @@ BUILD=${BUILD:-$TOP}
 read -r -a CC_CMD <<< "${CC:-clang}"
 FLAGS=(-g -O1 -std=c99 -DBLR_FUZZ -DHAVE_CONFIG_H "-I$BUILD" "-I$TOP/src"
        "-fsanitize=fuzzer,address,undefined" -fno-sanitize-recover=all)
-SRC=("$TOP/src/common.c" "$TOP/src/file.c" "$TOP/src/rc.c" "$TOP/src/archive.c"
+SRC=("$TOP/src/common.c" "$TOP/src/map.c" "$TOP/src/file.c" "$TOP/src/rc.c" "$TOP/src/archive.c"
      "$TOP/src/model.c" "$TOP/src/ogg.c" "$TOP/src/vorbis.c"
      "$TOP/src/codec.c" "$TOP/src/cm.c" "$TOP/src/cmmix.c" "$TOP/src/cpu.c")
 test -f "$BUILD/config.h" || { echo "fuzz/build.sh: no config.h in $BUILD; configure first" >&2;  exit 2; }

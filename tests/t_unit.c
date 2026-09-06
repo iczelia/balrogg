@@ -23,6 +23,20 @@
 
 static xt_rng rng;
 
+static void t_mapping(void) {
+  blr_map m;
+  sz i, n = BLR_IO_CHUNK + 37;
+  int bad = 0;
+  xt_section_begin("zeroed mappings");
+  bm_alloc(&m, n);
+  Fi(n, if (m.p[i]) bad = 1;  m.p[i] = (u8) (i * 17));
+  CHECK(!bad && m.p[n - 1] == (u8) ((n - 1) * 17),
+        "anonymous allocation is zeroed and writable through its last byte");
+  CHECK(!blr_no_mmap || m.heap, "--no-mmap forces heap allocation");
+  bm_free(&m);  bm_free(&m);
+  CHECK(!m.p && !m.len, "mapping can be released twice");
+}
+
 /* Cross file-window boundaries, revisit flushed data, then resume appending.
    This also exercises the backward writes used by the Opus carry chain. */
 static void t_file_windows(void) {
@@ -59,7 +73,16 @@ static void t_file_windows(void) {
   bf_read(f, 0, actual, n + 1);
   CHECK(f->len == n + 1 && !memcmp(actual, expected, n + 1),
         "overlapping forward compaction and truncation");
-  bf_close(f);  bf_close(copy);  free(expected);  free(actual);
+  bf_dropcache(f);  bf_readmeta(f, BLR_IO_CHUNK - 3, actual, 17);
+  CHECK(!memcmp(actual, expected + BLR_IO_CHUNK - 3, 17),
+        "metadata reads span windows after dropping the cache");
+  bf_close(f);  bf_close(copy);
+  CHECK(xt_file_size(path) == (long) n + 1, "closing removes mapped output padding");
+  f = bf_open(path, 0);  bf_read(f, 0, actual, n + 1);
+  CHECK(!memcmp(actual, expected, n + 1), "reopened input matches the output");
+  bf_dropcache(f);
+  CHECK(bf_get(f, n) == expected[n], "input can be read after unmapping");
+  bf_close(f);  free(expected);  free(actual);
   xt_unlink(path);  xt_unlink(path2);
 }
 
@@ -194,6 +217,35 @@ static void t_coder_ad(void) {
   CHECK(!rail, "%d probabilities reached a rail", rail);
   CHECK(ce[0] == RC_ALIM, "count capped at %d, not %d", ce[0], RC_ALIM);
   rc_enc_free(&e);  free(bit);  free(slot);
+}
+
+/*  Compare every valid probability and count against the original update,
+    and verify that neither endpoint can be reached.  */
+static void t_adapt(void) {
+  static const int limit[] = { 0, 1, RC_ALIM, RC_CNTMAX };
+  u32 i, j, k;
+  int bad = 0;
+  xt_section_begin("rc adaptive update");
+  Fi(0xFFFE,
+    Fj(RC_CNTMAX + 1,
+      Fk(2,
+        u8 count = (u8) j;
+        u32 v = i + 1, rate = 65535U / (j + 3);
+        u16 got = rc_adapt((u16) v, &count, RC_ALIM, (int) k);
+        i32 want = k ? (i32) v - (i32) (v * rate >> 16)
+                     : (i32) v + (i32) ((0xFFFF - v) * rate >> 16);
+        if (want < 1) want = 1;
+        if (want > 0xFFFE) want = 0xFFFE;
+        if (got != want || !got || got == 0xFFFF
+            || count != j + (j < RC_ALIM)) bad++)));
+  CHECK(!bad, "%d probability/count updates differ", bad);
+  bad = 0;
+  Fi(sizeof limit / sizeof *limit,
+    Fj(RC_CNTMAX + 1,
+      u8 count = (u8) j;
+      rc_adapt(RC_PINIT, &count, limit[i], 0);
+      if (count != j + (j < (u32) limit[i])) bad++));
+  CHECK(!bad, "observation counts differ at a cap boundary");
 }
 
 static void t_container(void) {
@@ -368,8 +420,12 @@ void xt_run_unit(void) {
   t_short_init();
   t_coder();
   t_coder_ad();
+  t_adapt();
   t_container();
-  t_file_windows();
+  t_mapping();  t_file_windows();
+  blr_no_mmap = 1;
+  t_mapping();  t_file_windows();
+  blr_no_mmap = 0;
   t_chunks();
   t_model();
 #if defined(HAVE_SSE2)

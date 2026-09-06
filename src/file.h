@@ -15,6 +15,7 @@
 #ifndef BLR_FILE_H
 #define BLR_FILE_H
 #include "common.h"
+#include "map.h"
 
 #define BLR_IO_CHUNK ((sz) 1 << 20)
 typedef struct { sz off, len; } bf_extent;
@@ -24,6 +25,9 @@ typedef struct blr_file {
   u8 * buf;
   sz len, at, used;
   int writable, dirty, live;
+  blr_map map;
+  sz disklen;
+  int nomap;
   struct blr_file * parent;
   bf_extent * ext;
   sz next, cext;

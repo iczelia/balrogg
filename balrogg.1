@@ -99,6 +99,10 @@ the output is written. Batch mode uses separate lines labeled by input file.
 .B \-\-progress-lines
 Write progress checkpoints as separate lines, suitable for log files.
 .TP
+.B \-\-no-mmap
+Use heap memory for model arenas and buffered file I/O instead of memory
+mappings.
+.TP
 .BR \-b ", " \-\-batch
 Every remaining argument is an input. Encoding writes
 .IR file .blr

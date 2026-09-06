@@ -62,8 +62,9 @@ if grep -Eq 'GetFileInformationByHandleEx|GetFileSizeEx|'\
   exit 1
 fi
 
-#  Allowed runtime and batch imports.
-allowed=' CloseHandle CreateFileA CreateProcessA ExitProcess
+#  Allowed runtime, mapping, batch and profiler imports.
+allowed=' CloseHandle CreateDirectoryA CreateFileA CreateFileMappingA CreateProcessA ExitProcess
+FlushViewOfFile MapViewOfFile UnmapViewOfFile
 GetCommandLineA GetEnvironmentVariableA GetExitCodeProcess
 GetFileAttributesA GetFileInformationByHandle GetFileSize GetLastError
 GetModuleFileNameA GetProcessHeap GetStdHandle GetSystemInfo

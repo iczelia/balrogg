@@ -41,11 +41,16 @@ static void seek_file(blr_file * f, sz at) {
 
 static blr_file * new_file(void * handle, int write, sz len) {
   blr_file * f = xcalloc(1, sizeof *f);
-  f->handle = handle;  f->writable = write;  f->len = len;
+  f->handle = handle;  f->writable = write;  f->len = f->disklen = len;
+  f->nomap = blr_no_mmap;
+#ifdef BLR_NO_MMAP
+  f->nomap = 1;
+#endif
   return f;
 }
 
 blr_file * bf_open(const char * path, int write) {
+  blr_file * f;
 #ifdef BLR_WIN32
   HANDLE h = blr_win_open(path,
                           write ? GENERIC_WRITE | GENERIC_READ : GENERIC_READ,
@@ -61,7 +66,7 @@ blr_file * bf_open(const char * path, int write) {
     FATAL_CODE(BLR_EXIT_IO, "cannot size %s", path);
   len = ((unsigned long long) hi << 32) | lo;
   FATAL_UNLESS(len <= SIZE_MAX, "%s is too large for this build", path);
-  return new_file(h, write, (sz) len);
+  f = new_file(h, write, (sz) len);
 #else
   FILE * h = fopen(path, write ? "w+b" : "rb");
   off_t len;
@@ -69,8 +74,10 @@ blr_file * bf_open(const char * path, int write) {
   if (fseeko(h, 0, SEEK_END) || (len = ftello(h)) < 0)
     FATAL_CODE(BLR_EXIT_IO, "cannot size %s", path);
   FATAL_UNLESS((uintmax_t) len <= SIZE_MAX, "%s is too large for this build", path);
-  return new_file(h, write, (sz) len);
+  f = new_file(h, write, (sz) len);
 #endif
+  if (!write && bm_file(&f->map, f->handle, 0, f->len, 0)) f->memory = f->map.p;
+  return f;
 }
 
 /* Chunk streams borrow their parent's handle. Full chunks are appended once;
@@ -102,20 +109,34 @@ void bf_extent_add(blr_file * f, sz off, sz len) {
   f->len += len;
 }
 
+static int size_file(blr_file * f, sz len) {
+#ifdef BLR_WIN32
+  seek_file(f, len);
+  if (!SetEndOfFile(f->handle)) return 0;
+#else
+  if ((off_t) len < 0 || (uintmax_t) (off_t) len != len) return 0;
+  if (fflush((FILE *) f->handle) || ftruncate(fileno((FILE *) f->handle), (off_t) len))
+    return 0;
+#endif
+  f->disklen = len;  return 1;
+}
+
+static void drop_window(blr_file * f) {
+  if (f->map.p) {
+    bm_free(&f->map);  f->memory = NULL;  f->buf = NULL;
+  }
+  f->live = 0;
+}
+
 void bf_resize(blr_file * f, sz len) {
   FATAL_UNLESS(!f->parent && f->writable, "invalid resize");
-  bf_flush(f);  seek_file(f, len);
-#ifdef BLR_WIN32
-  if (!SetEndOfFile(f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
-#else
-  if (fflush((FILE *) f->handle) || ftruncate(fileno((FILE *) f->handle), (off_t) len))
-    FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
-#endif
-  f->len = len;  f->live = 0;
+  bf_flush(f);  drop_window(f);
+  if (!size_file(f, len)) FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
+  f->len = len;
 }
 
 void bf_dropcache(blr_file * f) {
-  bf_flush(f);  free(f->buf);  f->buf = NULL;  f->live = 0;
+  bf_flush(f);  drop_window(f);  free(f->buf);  f->buf = NULL;
 }
 
 /* Overlapping moves use one reusable window and the safe copy direction. */
@@ -148,6 +169,10 @@ void bf_flush(blr_file * f) {
     bf_extent_add(f, at + sizeof h, f->used);
     f->dirty = 0;  return;
   }
+  if (f->map.p) {
+    if (!bm_flush(&f->map)) FATAL_CODE(BLR_EXIT_IO, "cannot flush mapped file");
+    f->dirty = 0;  return;
+  }
   seek_file(f, f->at);
 #ifdef BLR_WIN32
   { DWORD n;
@@ -157,14 +182,23 @@ void bf_flush(blr_file * f) {
   if (fwrite(f->buf, 1, f->used, (FILE *) f->handle) != f->used)
     FATAL_CODE(BLR_EXIT_IO, "cannot write file");
 #endif
+  f->disklen = MAX(f->disklen, f->at + f->used);
   f->dirty = 0;
 }
 
 void bf_window(blr_file * f, sz at) {
   FATAL_UNLESS(at <= f->len, "file offset beyond end");
-  bf_flush(f);
+  bf_flush(f);  drop_window(f);
   f->at = at / BLR_IO_CHUNK * BLR_IO_CHUNK;
   f->used = MIN(BLR_IO_CHUNK, f->len - f->at);
+  if (f->handle && !f->nomap) {
+    sz n = f->writable ? MIN(BLR_IO_CHUNK, SIZE_MAX - f->at) : f->used;
+    if ((!f->writable || f->at + n <= f->disklen || size_file(f, f->at + n))
+        && bm_file(&f->map, f->handle, f->at, n, f->writable)) {
+      free(f->buf);  f->buf = f->map.p;  f->live = 1;  return;
+    }
+    f->nomap = 1;
+  }
   if (!f->buf) f->buf = xmalloc(BLR_IO_CHUNK);
   if (f->used) {
     if (f->parent) {
@@ -222,7 +256,10 @@ void bf_write(blr_file * f, sz at, const void * in, sz n) {
 }
 
 void bf_copy(blr_file * to, blr_file * from, sz at, sz n) {
-  u8 * buf = xmalloc(MIN(n, BLR_IO_CHUNK));
+  u8 * buf;
+  FATAL_UNLESS(at <= from->len && n <= from->len - at, "file copy beyond end");
+  if (from->memory) { bf_write(to, to->len, from->memory + at, n);  return; }
+  buf = xmalloc(MIN(n, BLR_IO_CHUNK));
   while (n) {
     sz take = MIN(n, BLR_IO_CHUNK);
     bf_read(from, at, buf, take);  bf_write(to, to->len, buf, take);
@@ -233,12 +270,14 @@ void bf_copy(blr_file * to, blr_file * from, sz at, sz n) {
 
 void bf_close(blr_file * f) {
   if (!f) return;
-  bf_flush(f);
-  if (!f->parent && !f->memory) {
+  bf_flush(f);  drop_window(f);
+  if (f->handle) {
+    if (f->writable && f->disklen != f->len && !size_file(f, f->len))
+      FATAL_CODE(BLR_EXIT_IO, "cannot truncate file");
 #ifdef BLR_WIN32
-  if (!CloseHandle(f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot close file");
+    if (!CloseHandle(f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot close file");
 #else
-  if (fclose((FILE *) f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot close file");
+    if (fclose((FILE *) f->handle)) FATAL_CODE(BLR_EXIT_IO, "cannot close file");
 #endif
   }
   free(f->ext);  free(f->buf);  free(f);
@@ -248,7 +287,7 @@ void bf_close(blr_file * f) {
 void bf_readmeta(blr_file * f, sz at, void * out, sz n) {
   FATAL_UNLESS(at <= f->len && n <= f->len - at && n <= BLR_IO_CHUNK,
                "invalid metadata read");
-  if (f->parent || f->memory) { bf_read(f, at, out, n);  return; }
+  if (f->parent || f->memory || f->map.p) { bf_read(f, at, out, n);  return; }
   bf_flush(f);  seek_file(f, at);
 #ifdef BLR_WIN32
   { DWORD got;

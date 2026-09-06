@@ -49,9 +49,14 @@ AC_C_INLINE
 AC_C_BIGENDIAN
 AC_SYS_LARGEFILE
 
-AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h \
+AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h sys/mman.h \
                   windows.h process.h])
-AC_CHECK_FUNCS([fork waitpid sysconf setrlimit])
+AC_CHECK_FUNCS([fork waitpid sysconf setrlimit mmap munmap msync])
+AC_ARG_ENABLE([mmap],
+  [AS_HELP_STRING([--disable-mmap], [use heap arenas and buffered file I/O])],,
+  [enable_mmap=yes])
+AS_IF([test "x$enable_mmap" = xno],
+  [AC_DEFINE([BLR_NO_MMAP], [1], [Disable memory mappings])])
 
 case "$host_os" in
   msdosdjgpp*|djgpp*) blr_is_dos=yes ;;

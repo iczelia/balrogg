@@ -80,6 +80,12 @@ static void t_verbs(void) {
   CHECK(xt_run(args, log) == 0, "e on a Vorbis file");
   sprintf(args, "d \"%s\" \"%s\"", arc, out);
   CHECK(xt_run(args, log) == 0 && xt_same_file(fx, out), "d gives the file back");
+  sprintf(args, "--no-mmap -3 e \"%s\" \"%s\"", fx, arc2);
+  CHECK(xt_run(args, log) == 0 && xt_same_file(arc, arc2),
+        "--no-mmap preserves archive bytes");
+  sprintf(args, "--no-mmap d \"%s\" \"%s\"", arc, out);
+  CHECK(xt_run(args, log) == 0 && xt_same_file(fx, out),
+        "--no-mmap decodes mapped output");
   sprintf(args, "dump \"%s\"", arc);
   CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "streams")
         && xt_file_contains(log, "level 2"), "dump prints the layout");
@@ -148,7 +154,7 @@ static void t_batch(void) {
     CHECK(!strcmp(xt_batch_name(0, blr[i]), copy[i]),
           "batch names round-trip: %s", copy[i]);
     b = slurp(src, &n);  spew(copy[i], b, n);  free(b));
-  sprintf(args, "--progress -b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
+  sprintf(args, "--no-mmap --progress -b -2 --jobs=2 e %s %s %s", copy[0], copy[1], copy[2]);
   CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "100%"),
         "batch encode propagates progress to workers");
   Fi(3, if (xt_file_size(blr[i]) <= 0) ok = 0);

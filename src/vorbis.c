@@ -91,6 +91,7 @@ void vb_init(vb_ctx * v) {
   memset(v->sl, 0, sizeof v->sl);  memset(v->st, 0, sizeof v->st);
   v->nsl = 0;  v->ns = VB_NSLOT;
   v->ar = NULL;  v->arn = 0;  v->mem = NULL;
+  memset(&v->arena, 0, sizeof v->arena);
   v->clsm = NULL;
   memset(v->ab, 0, sizeof v->ab);  v->aglob = v->astep = 0;
   memset(&v->cm, 0, sizeof v->cm);  v->cm_mask = 0;  memset(v->nv0, 0, sizeof v->nv0);
@@ -147,8 +148,7 @@ void vb_free(vb_ctx * v) {
   free(v->su);  v->su = NULL;  v->nsu = 0;  v->cur = NULL;
   Fi(VB_MAXSLOT, free(v->sl[i].len));
   memset(v->sl, 0, sizeof v->sl);  v->nsl = 0;
-  if (v->ar) Fi((v->arn + VB_APSIZE - 1) / VB_APSIZE, free(v->ar[i]));
-  free(v->ar);  v->ar = NULL;
+  bm_free(&v->arena);  v->ar = NULL;
   free(v->mem);  v->mem = NULL;
   free(v->clsm);  v->clsm = NULL;
   free(v->symbols);  v->symbols = NULL;
@@ -218,17 +218,11 @@ void vb_endlink(vb_ctx * v) {
   memset(v->st, 0, sizeof v->st);
 }
 
-/*  A new setup resets histories owned by codebooks and Floor 1 classes. Other
-    setup-field histories persist across the stream.  */
-
 static const u8 RST[] = {
   M_DIM, M_ENT, M_ORDF, M_ORDR, M_LEN, M_VBITS, M_MULT,
   M_PCLS, M_MBOOK, M_SBOOK, M_FX,
   M_MULTW                     /*  a codebook owns this one too  */
 };
-
-/*  Encoding and decoding share one traversal selected by `io.enc`. Each
-    primitive receives its target stream because audio metadata is split.  */
 
 #define S_BULK  0                 /*  setup headers, and the audio payload  */
 #define S_MODE  1                 /*  page headers, and the packet modes  */
@@ -253,7 +247,6 @@ static INLINE int cbit(io * z, int s, u16 * p, u8 * c, int b) {
 }
 
 /*  Vorbis packs the least significant bit first inside each byte.  */
-
 static u32 bget(io * z, int n) {
   u32 r = 0;
   int i;
@@ -883,20 +876,8 @@ static const u32 AR_SIZE[A_NTAB] = {
 /*  Pack magnitude bit positions into a triangular index.  */
 static const u8 AR_TRIB[AR_MAGB + 1] = { 0, 0, 1, 3, 6, 10, 15, 21, 28 };
 
-/*  Return a bounds-checked arena index.  */
 static INLINE u32 atab(const vb_ctx * v, int t, u32 idx) {
-  FATAL_IF_HOT(idx >= AR_SIZE[t])
-    ("vorbis: model index %lu exceeds table %d size %lu",
-     (unsigned long) idx, t, (unsigned long) AR_SIZE[t]);
   return v->ab[t] + idx;
-}
-
-static INLINE u16 * ar(vb_ctx * v, u32 at) {
-  FATAL_IF_HOT((sz) at >= v->arn)
-    ("vorbis: audio model slot %lu out of range", (unsigned long) at);
-  if (!v->ar[at >> VB_APBITS])
-    v->ar[at >> VB_APBITS] = xcalloc(1, sizeof(vb_apage));
-  return v->ar[at >> VB_APBITS]->p + (at & (VB_APSIZE - 1));
 }
 
 /*  Zero arena entries lazily expand to RC_PINIT.  */
@@ -904,11 +885,12 @@ static INLINE u16 * ar(vb_ctx * v, u32 at) {
 
 /*  Code one arena bit and update its parallel observation count.  */
 static INLINE int abit(io * z, u32 at, int lim, int b) {
-  vb_ctx * v = z->v;
-  u16 * p = ar(v, at);
+  vb_apage * page = z->v->ar + (at >> VB_APBITS);
+  u32 off = at & (VB_APSIZE - 1);
+  u16 * p = page->p + off;
   AR_LIVE(p);
-  if (!z->enc) return rc_dec_bit_ad(z->d[S_BULK], p, v->ar[at >> VB_APBITS]->c + (at & (VB_APSIZE - 1)), lim);
-  rc_enc_bit_ad(z->e[S_BULK], p, v->ar[at >> VB_APBITS]->c + (at & (VB_APSIZE - 1)), lim, b);
+  if (!z->enc) return rc_dec_bit_ad(z->d[S_BULK], p, page->c + off, lim);
+  rc_enc_bit_ad(z->e[S_BULK], p, page->c + off, lim, b);
   return b;
 }
 
@@ -921,33 +903,28 @@ static void arena(vb_ctx * v) {
   for (at = 0, i = A_NGLOB; i < A_NTAB; i++) { v->ab[i] = at;  at += AR_SIZE[i]; }
   v->astep = at;
   v->arn = (sz) v->aglob + (sz) v->ns * v->astep;
-  v->ar = xcalloc((v->arn + VB_APSIZE - 1) / VB_APSIZE, sizeof *v->ar);
+  bm_alloc(&v->arena, (v->arn + VB_APSIZE - 1) / VB_APSIZE * sizeof *v->ar);
+  v->ar = (vb_apage *) v->arena.p;
   memset(v->ai, 0, sizeof v->ai);
   memset(v->ad, 0, sizeof v->ad);
   v->mem = xcalloc(VB_MEMSZ, 1);
   v->clsm = xcalloc(VB_CLSMSZ, 1);
 }
 
-/* Clear a model range without allocating its untouched pages. Slot boundaries
-   need not align with pages; preserve neighboring slots on partial pages. */
+/*  Slot boundaries can share a page; clear only the requested model range.  */
 static void ar_clear(vb_ctx * v, sz at, sz n) {
   while (n) {
     sz off = at & (VB_APSIZE - 1), take = MIN(n, VB_APSIZE - off);
-    vb_apage * p = v->ar[at >> VB_APBITS];
-    if (p) {
-      memset(p->p + off, 0, take * sizeof *p->p);
-      memset(p->c + off, 0, take);
-    }
+    vb_apage * p = v->ar + (at >> VB_APBITS);
+    memset(p->p + off, 0, take * sizeof *p->p);
+    memset(p->c + off, 0, take);
     at += take;  n -= take;
   }
 }
 
-/*  Return slot k's table base, seeding on first use. Previously untouched
-    xcalloc regions need no clearing after eviction.  */
+/*  pool_slot bounds k. Seed once per partition, outside the digit loop.  */
 static u32 ar_slot(vb_ctx * v, u32 k) {
   u32 at = v->aglob + k * v->astep;
-  FATAL_IF_HOT(k >= v->ns)
-    ("vorbis: model slot %lu out of range", (unsigned long) k);
   if (!v->ai[k]) {
     if (v->ad[k]) {
       ar_clear(v, at, v->astep);
@@ -1153,9 +1130,11 @@ static void cm_step(vb_ctx * v, u32 ch, u32 c, i32 val) {
 static INLINE int pbit(io * z, u32 off, int st, int sel, u32 h, int exp,
                        int b) {
   vb_ctx * v = z->v;
-  u16 * p = ar(v, off);
+  vb_apage * page = v->ar + (off >> VB_APBITS);
+  u32 at = off & (VB_APSIZE - 1);
+  u16 * p = page->p + at;
   AR_LIVE(p);
-  return cm_bit(&v->cm, st, sel, h, p, v->ar[off >> VB_APBITS]->c + (off & (VB_APSIZE - 1)), exp, b);
+  return cm_bit(&v->cm, st, sel, h, p, page->c + at, exp, b);
 }
 
 /*  Route enabled stages through CM and others through the arena.  */
@@ -1199,10 +1178,10 @@ static u32 rs_cls(io * z, u32 q, u32 ch, u32 p, u32 v) {
 
 /*  Code a residue digit through five mixed-radix tables.  */
 static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
-                         u32 ch, i32 v) {
+                         u32 ch, u32 mb, i32 v) {
   vb_ctx * n = z->v;
   int lim = n->t.alim;
-  u32 mb = ar_slot(z->v, b->slot), o, ax, il, m, a, mag = 0, k, idx;
+  u32 o, ax, il, m, a, mag = 0, k, idx;
   u32 la = n->fh[0], nb = 0;
   u8 * mr, * mw;
   int t, sg = 0;
@@ -1326,7 +1305,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
 
 /*  Process one codebook symbol as base-`nv` digits.  */
 static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
-                          u32 il) {
+                          u32 il, u32 mb) {
   u32 k, e = 0, np = 1, t = 0, c, ch;
   i32 d;
   if (z->enc) { e = bk_get(z, b);  t = e; }
@@ -1339,10 +1318,10 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
     if (z->enc) {
       u32 next = (u32) ((uint64_t) t * b->divmul >> b->divshift);
       d = (i32) b->mult[t - next * b->nv] - (i32) b->off;  t = next;
-      rs_val(z, b, q, pass, c, chc, d);
+      rs_val(z, b, q, pass, c, chc, mb, d);
     } else {
       u32 p;
-      d = rs_val(z, b, q, pass, c, chc, 0);
+      d = rs_val(z, b, q, pass, c, chc, mb, 0);
       FATAL_IF_HOT(!(d + (i32) b->off >= 0 && d + (i32) b->off < (i32) b->base))
         ("vorbis: residue digit %ld outside codebook grid", (long) d);
       p = b->inv[(u32) (d + (i32) b->off)];
@@ -1363,17 +1342,17 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
 /*  Process one partition with inlined symbol and digit operations.  */
 static HOT FLATTEN void rs_part(io * z, vb_res * r, vb_book * b, u32 q,
                                 u32 pass, u32 g, u32 il) {
-  u32 i, st;
+  u32 i, st, mb = z->probe ? 0 : ar_slot(z->v, b->slot);
   if (r->type == 0) {
     st = r->psz / b->dim;
     FATAL_IF_HOT(st * b->dim != r->psz)
       ("vorbis: residue 0 partition %lu not divisible by %lu",
        (unsigned long) r->psz, (unsigned long) b->dim);
-    Fi(st, rs_sym(z, b, q, pass, g + i, st, il);
+    Fi(st, rs_sym(z, b, q, pass, g + i, st, il, mb);
            if (z->rawpkt) return);
   } else
     for (i = 0; i < r->psz && !z->rawpkt; i += b->dim)
-      rs_sym(z, b, q, pass, g + i, 1, il);
+      rs_sym(z, b, q, pass, g + i, 1, il, mb);
 }
 
 /*  Process compacted residue types 0 and 1 or interleaved type 2.  */
