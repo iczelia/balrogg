@@ -132,8 +132,8 @@ static void unicode(void) {
     screen.  Calls to fputc deliberately split a four-byte UTF-8 sequence.  */
 static void console(void) {
   HANDLE h, errors = GetStdHandle(STD_ERROR_HANDLE);
-  wchar_t text[8];
-  DWORD got;
+  wchar_t text[8], expected[8];
+  DWORD got, count;
   COORD origin = { 0, 0 };
   if (!AllocConsole()) { FreeConsole();  AllocConsole(); }
   SetStdHandle(STD_ERROR_HANDLE, errors);
@@ -143,14 +143,20 @@ static void console(void) {
   check(h != INVALID_HANDLE_VALUE, "create a console screen buffer");
   if (h == INVALID_HANDLE_VALUE) return;
   SetStdHandle(STD_OUTPUT_HANDLE, h);
+  if (!WriteConsoleW(h, L"A\xD834\xDD1E" L"B", 4, &got, NULL) || got != 4 ||
+      !ReadConsoleOutputCharacterW(h, expected, 8, origin, &count) || !count ||
+      !FillConsoleOutputCharacterW(h, L' ', 8, origin, &got) || got != 8 ||
+      !SetConsoleCursorPosition(h, origin)) {
+    check(0, "write the UTF-16 console reference");  return;
+  }
   fputs("A", stdout);
   fputc(0xF0, stdout);  fputc(0x9D, stdout);
   fputc(0x84, stdout);  fputc(0x9E, stdout);
   fputs("B", stdout);
   check(!fflush(stdout), "flush UTF-8 console output");
-  check(ReadConsoleOutputCharacterW(h, text, 4, origin, &got) && got == 4 &&
-        text[0] == L'A' && text[1] == 0xD834 && text[2] == 0xDD1E &&
-        text[3] == L'B', "console output is UTF-16");
+  check(ReadConsoleOutputCharacterW(h, text, 8, origin, &got) && got == count &&
+        !memcmp(text, expected, got * sizeof *text),
+        "console output matches WriteConsoleW");
   /*  stdout's 4096-byte buffer ends partway through the next code point.  */
   { char fill[4095];
     COORD size = { 4098, 64 }, last = { 4095, 0 };

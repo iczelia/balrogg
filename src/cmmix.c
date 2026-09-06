@@ -80,7 +80,7 @@ static INLINE void mix_train(mixin t, short * w, int e) {
   int i;
   if (!e) return;
   Fi(CM_NI,
-    i32 v = w[i] + (((((i32) t.v[i] * e * 2) >> 16) + 1) >> 1);
+    i32 v = w[i] + ((((i32) t.v[i] * e * 2 >> 16) + 1) >> 1);
     if (v < -32768) v = -32768;
     if (v > 32767) v = 32767;
     w[i] = (short) v);
@@ -113,8 +113,7 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
                  sg * cm_str16[c->mp[mi]],
                  sg * (int) (c->mlen < 32 ? c->mlen : 32) * 64);
   }
-  {
-    int dot = (int) (mix_dot(in, w) >> 7);
+  { int dot = (int) (mix_dot(in, w) >> 7);
     if (dot < -2047) dot = -2047;
     if (dot > 2047) dot = 2047;
     pr = cm_squash16[dot + 2048];                       /*  P(1)  */
@@ -124,11 +123,11 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
   PROF(prof_hook(NULL, 65536u - pr, bit));
   *sp = cm_nex[state][bit];
   d = rc_divt[x & 0xFFFF];
-  nv = bit ? (i32) ps + (i32) (((0xFFFF - ps) * d) >> 16)
-           : (i32) ps - (i32) ((ps * d) >> 16);
+  nv = bit ? (i32) ps + (i32) ((0xFFFF - ps) * d >> 16)
+           : (i32) ps - (i32) (ps * d >> 16);
   if (nv < 1) nv = 1;
   if (nv > 0xFFFE) nv = 0xFFFE;
-  s->sm[state] = ((u32) nv << 16) | ((x & 0xFFFF) + ((int) (x & 0xFFFF) < c->lim));
+  s->sm[state] = (u32) nv << 16 | ((x & 0xFFFF) + ((int) (x & 0xFFFF) < c->lim));
   mix_train(in, w, ((bit << 12) - (int) (pr >> 4)) * c->lr);
   *p = rc_adapt(*p, cnt, c->lim, bit);
   if (exp >= 0) c->mp[mi] = rc_adapt(c->mp[mi], c->mpc + mi, c->lim, bit == exp);

@@ -314,13 +314,13 @@ static int console_write(bfile * f, const unsigned char * p, size_t n) {
       else if (b >= 0xC2 && b <= 0xF4) {
         f->need = b < 0xE0 ? 1 : b < 0xF0 ? 2 : 3;
         f->min = f->need == 1 ? 0x80 : f->need == 2 ? 0x800 : 0x10000;
-        f->point = b & (0x7F >> f->need);
+        f->point = b & 0x7F >> f->need;
         continue;
       } else cp = 0xFFFD;
     }
     if (cp >= 0x10000) {
       cp -= 0x10000;
-      out[used++] = (wchar_t) (0xD800 | (cp >> 10));
+      out[used++] = (wchar_t) (0xD800 | cp >> 10);
       out[used++] = (wchar_t) (0xDC00 | (cp & 1023));
     } else out[used++] = (wchar_t) cp;
     if (used >= 510) {
@@ -527,13 +527,11 @@ static int format(sink * k, const char * fmt, va_list ap) {
       if (!(x >= 0) || x >= 18446744073709551616.0) {
         text = x != x ? "nan" : "inf";  body = 3;  goto string;
       }
-      for (j = 0; j < places; j++) scale *= 10;
+      Fj(places, scale *= 10);
       whole = (unsigned long long) x;
       frac = (unsigned long long) ((x - (double) whole) * scale + 0.5);
       if (frac == scale) { whole++;  frac = 0; }
-      for (j = 0; j < places; j++) {
-        *--p = (char) ('0' + frac % 10);  frac /= 10;
-      }
+      Fj(places, *--p = (char) ('0' + frac % 10);  frac /= 10);
       if (places || alt) *--p = '.';
       do { *--p = (char) ('0' + whole % 10);  whole /= 10; } while (whole);
       if (neg || plus || space) *--p = neg ? '-' : plus ? '+' : ' ';

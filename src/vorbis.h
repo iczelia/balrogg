@@ -116,9 +116,9 @@ typedef struct {
 
 typedef struct {
   vb_book * bk;  u32 nbk;
-  vb_floor * fl; u32 nfl;
-  vb_res * rs;   u32 nrs;
-  vb_map * mp;   u32 nmp;
+  vb_floor * fl;  u32 nfl;
+  vb_res * rs;  u32 nrs;
+  vb_map * mp;  u32 nmp;
   u32 nmd;
   u8 blockflag[VB_MAXMODE], mdmap[VB_MAXMODE];
 } vb_setup;
@@ -235,7 +235,7 @@ typedef struct {
   u8 ad[VB_MAXSLOT];          /*  regions ever written  */
   u8 * mem;                   /*  VB_MEMSZ: [residue][pass][index][channel]  */
   u8 * clsm;                  /*  VB_CLSMSZ: the previous packet's class  */
-  u32 * symbols; sz nsymbols, csymbols; int symfull;
+  u32 * symbols;  sz nsymbols, csymbols;  int symfull;
   u32 * ys;  sz ysn;          /*  scratch: floor posts, per channel  */
   u32 * cs;  sz csn;          /*  scratch: residue classifications  */
   u8 fpl[VB_FPLSZ];           /*  floor 1: the previous length per post  */

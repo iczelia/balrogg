@@ -61,12 +61,12 @@ static INLINE void orc_enc_bit(orc_enc * e, u16 * p, u8 * c, int bit) {
 static void orc_enc_cum(orc_enc * e, u32 fl, u32 fh, u32 ft) {
   u32 r;
   /*  Avoid varargs overhead on this hot path.  */
-  FATAL_IF_HOT(!(fl < fh && fh <= ft && ft <= (1UL << 17)))
+  FATAL_IF_HOT(!(fl < fh && fh <= ft && ft <= 1UL << 17))
     ("opus: bad cumulative step %lu..%lu of %lu",
      (unsigned long) fl, (unsigned long) fh, (unsigned long) ft);
   r = e->range / ft;
   if (fl > 0) orc_addlow(e, r * fl);
-  e->range = (fh < ft) ? r * (fh - fl) : e->range - r * fl;
+  e->range = fh < ft ? r * (fh - fl) : e->range - r * fl;
   orc_norm(e);
 }
 
@@ -86,12 +86,12 @@ static u32 orc_get(orc_dec * d) { return d->pos < d->len ? bf_get(d->file, d->of
 static void orc_dec_init(orc_dec * d, blr_file * file, sz off, sz len) {
   int i;
   d->file = file;  d->off = off;  d->len = len;  d->pos = 0;  d->code = 0;
-  Fi(4, d->code = (d->code << 8) | orc_get(d));
+  Fi(4, d->code = d->code << 8 | orc_get(d));
   d->range = 0xFFFFFFFFUL;
 }
 
 static INLINE void orc_dnorm(orc_dec * d) {
-  while (d->range < RC_TOP) { d->code = (d->code << 8) | orc_get(d);  d->range <<= 8; }
+  while (d->range < RC_TOP) { d->code = d->code << 8 | orc_get(d);  d->range <<= 8; }
 }
 
 static INLINE int orc_dec_bit(orc_dec * d, u16 * p, u8 * c) {
@@ -115,7 +115,7 @@ static INLINE u32 orc_dec_cum_get(orc_dec * d, u32 ft) {
 
 static INLINE void orc_dec_cum_upd(orc_dec * d, u32 fl, u32 fh, u32 ft) {
   d->code -= d->ext * fl;
-  d->range = (fh < ft) ? d->ext * (fh - fl) : d->range - d->ext * fl;
+  d->range = fh < ft ? d->ext * (fh - fl) : d->range - d->ext * fl;
 }
 
 static u32 orc_dec_raw(orc_dec * d, int nbits) {
@@ -153,7 +153,7 @@ static void p_raw(u32 * v, int nbits) {
     int k = nbits > 16 ? 16 : nbits;
     nbits -= k;
     if (om_mode == OM_DEC) *v |= orc_dec_raw(D, k) << nbits;
-    else orc_enc_raw(E, (*v >> nbits) & ((1UL << k) - 1UL), k);
+    else orc_enc_raw(E, *v >> nbits & ((1UL << k) - 1UL), k);
   }
 }
 
@@ -174,7 +174,7 @@ static void p_uniform(u32 * v, u32 V) {
     if (om_mode == OM_DEC) {
       hi = orc_dec_cum_get(D, ft);  orc_dec_cum_upd(D, hi, hi + 1, ft);
       lo = 0;  p_raw(&lo, ftb);
-      *v = (hi << ftb) | lo;
+      *v = hi << ftb | lo;
       if (*v > t) *v = t;
     } else {
       hi = *v >> ftb;  lo = *v & ((1UL << ftb) - 1UL);
@@ -204,12 +204,11 @@ static prior pri[1UL << PHB];
 
 static prior * pri_find(okey key) {
   okey h = key * K64(0x106689D4, 0x5497FDB5);
-  unsigned i = (unsigned) (h >> (64 - PHB)), n;
+  unsigned i = (unsigned) (h >> (64 - PHB)), j;
   /*  The table never grows: a full one would otherwise probe forever.  */
-  for (n = 0; n < (1U << PHB); n++) {
+  Fj(1U << PHB,
     if (!pri[i].f || pri[i].key == key) return &pri[i];
-    i = (i + 1) & ((1U << PHB) - 1);
-  }
+    i = (i + 1) & ((1U << PHB) - 1));
   FATAL_CODE(BLR_EXIT_INTERNAL, "internal: the Opus prior table is full");
   return NULL;
 }
@@ -254,7 +253,7 @@ static sz nlive, clive;
 /*  Include the prior index in the hash because PVQ keys omit geometry. Probes
     still compare the complete key and prior pair.  */
 static INLINE unsigned ctx_slot(okey key, const prior * pr) {
-  okey h = (key ^ ((okey) (pr - pri) * K64(0xC2B2AE3D, 0x27D4EB4F)))
+  okey h = (key ^ (okey) (pr - pri) * K64(0xC2B2AE3D, 0x27D4EB4F))
          * K64(0x9E3779B9, 0x7F4A7C15);
   return (unsigned) (h >> (64 - chb));
 }
@@ -280,7 +279,7 @@ static void ctx_grow(void) {
 
 static mctx * ctx_find(okey key, const prior * pr) {
   unsigned i;
-  if (nlive * 2 >= ((sz) 1 << chb)) ctx_grow();
+  if (nlive * 2 >= (sz) 1 << chb) ctx_grow();
   i = ctx_slot(key, pr);
   for (;;) {
     if (!ctxs[i].t) {
@@ -405,10 +404,10 @@ static int have_pvq[NB][8][8];
 static u8 site_hist[OREC_S_COUNT];
 
 static void om_reset(void) {
-  memset(prev_qi, 0, sizeof prev_qi);      memset(band_qi, 0, sizeof band_qi);
-  memset(prev_theta, 0, sizeof prev_theta);memset(prev_fine, 0, sizeof prev_fine);
+  memset(prev_qi, 0, sizeof prev_qi);  memset(band_qi, 0, sizeof band_qi);
+  memset(prev_theta, 0, sizeof prev_theta);  memset(prev_fine, 0, sizeof prev_fine);
   c0_qi = 0;  c0_qib = -1;  c0_fine = 0;  c0_fineb = -1;  c0_finen = -1;
-  memset(have_pvq, 0, sizeof have_pvq);    memset(last_pvqV, 0, sizeof last_pvqV);
+  memset(have_pvq, 0, sizeof have_pvq);  memset(last_pvqV, 0, sizeof last_pvqV);
   memset(site_hist, 0, sizeof site_hist);
 }
 
@@ -448,11 +447,11 @@ static void om_free(void) {
 
 /*  Identify inverse-CDF tables by content.  Hash the supplied tail through
     its terminating zero and cache by pointer.  */
-typedef struct { const void * ptr; u32 ftb; okey id; } tabent;
+typedef struct { const void * ptr;  u32 ftb;  okey id; } tabent;
 static tabent tabs[1024];
 
 static okey tab_hash(const void * icdf, int wide, u32 ftb) {
-  okey h = 0xcbf29ce484222325ULL ^ ((okey) wide << 32) ^ ftb;
+  okey h = 0xcbf29ce484222325ULL ^ (okey) wide << 32 ^ ftb;
   unsigned prev;
   int n = 0;
   do {
@@ -465,14 +464,14 @@ static okey tab_hash(const void * icdf, int wide, u32 ftb) {
 
 static okey tab_id(const void * icdf, int wide, u32 ftb) {
   sz slot = (((sz) icdf >> 3) * 2654435761U + ftb) & 1023, i;
-  for (i = 0; i < 8; i++, slot = (slot + 1) & 1023) {
+  Fi(8,
     tabent * t = &tabs[slot];
     if (t->ptr == icdf && t->ftb == ftb) return t->id;
     if (!t->ptr) {
       t->ptr = icdf;  t->ftb = ftb;  t->id = tab_hash(icdf, wide, ftb);
       return t->id;
     }
-  }
+    slot = (slot + 1) & 1023);
   return tab_hash(icdf, wide, ftb);
 }
 
@@ -503,14 +502,14 @@ static unsigned lap_freq(unsigned fs0, int decay, int val) {
   s = -(val < 0);
   v = (val + s) ^ s;
   fl = fs0;
-  fs = (unsigned) (((i32) (32768 - 1 * (2 * 16) - (int) fs0) * (i32) (16384 - decay)) >> 15);
+  fs = (unsigned) ((i32) (32768 - 1 * (2 * 16) - (int) fs0) * (i32) (16384 - decay) >> 15);
   for (i = 1; fs > 0 && i < v; i++) {
     fs *= 2;  fl += fs + 2 * 1;
-    fs = (unsigned) (((i32) fs * (i32) decay) >> 15);
+    fs = (unsigned) ((i32) fs * (i32) decay >> 15);
   }
   if (!fs) {
     int di, ndi_max;
-    ndi_max = (32768 - (int) fl + 1 - 1);
+    ndi_max = 32768 - (int) fl + 1 - 1;
     ndi_max = (ndi_max - s) >> 1;
     di = v - i;
     if (di > ndi_max - 1) di = ndi_max - 1;
@@ -528,13 +527,13 @@ static unsigned lap_freq(unsigned fs0, int decay, int val) {
 }
 
 static prior * prior_laplace(u32 fs0, int decay) {
-  okey key = ((okey) fs0 << 20) | (okey) (unsigned) decay | ((okey) 0x80000000UL << 32);
+  okey key = (okey) fs0 << 20 | (okey) (unsigned) decay | (okey) 0x80000000UL << 32;
   prior * p = pri_find(key);
   if (!p->f) {
     u32 raw[LAPN], used = 0;
     sz i;
     Fi(LAPN - 1, raw[i] = lap_freq(fs0, decay, (int) i - LAPW);  used += raw[i]);
-    raw[LAPN - 1] = (used < 32768) ? 32768 - used : 1;   /*  escape  */
+    raw[LAPN - 1] = used < 32768 ? 32768 - used : 1;   /*  escape  */
     pri_build(p, key, raw, LAPN, 32768, KP[OP_LAPLACE].scale);
   }
   return p;
@@ -542,7 +541,7 @@ static prior * prior_laplace(u32 fs0, int decay) {
 
 /*  Mode 0 uses the step PDF and mode 2 the triangular PDF.  */
 static prior * prior_theta(int mode, int qn) {
-  okey key = ((okey) mode << 24) | (okey) qn | ((okey) 0xC0000000UL << 32);
+  okey key = (okey) mode << 24 | (okey) qn | (okey) 0xC0000000UL << 32;
   prior * p = pri_find(key);
   if (!p->f) {
     u32 raw[258], ft;
@@ -555,7 +554,7 @@ static prior * prior_theta(int mode, int qn) {
       Fi((sz) n, raw[i] = (u32) ((int) i <= x0 ? p0 : 1));
     } else {
       ft = (u32) (((qn >> 1) + 1) * ((qn >> 1) + 1));
-      Fi((sz) n, raw[i] = (u32) ((int) i <= (qn >> 1) ? (int) i + 1 : qn + 1 - (int) i));
+      Fi((sz) n, raw[i] = (u32) ((int) i <= qn >> 1 ? (int) i + 1 : qn + 1 - (int) i));
     }
     pri_build(p, key, raw, n, ft, KP[OP_THETA].scale);
   }
@@ -566,8 +565,8 @@ static prior * prior_uniform(int n, int scale) {
   okey key;
   prior * p;
   FATAL_UNLESS(n > 0, "opus: empty uniform alphabet");
-  key = ((okey) n << 8) | (okey) (unsigned) (scale & 0xFF)
-      | ((okey) 0xE0000000UL << 32);
+  key = (okey) n << 8 | (okey) (unsigned) (scale & 0xFF)
+      | (okey) 0xE0000000UL << 32;
   p = pri_find(key);
   if (!p->f) {
     u32 raw[4097];
@@ -611,7 +610,7 @@ static void pvq_ubuild(void) {
   int n, k;
   if (pvq_ut) return;
   pvq_ut = xmalloc((sz) (PVQ_UN + 1) * (PVQ_UK + 3) * sizeof *pvq_ut);
-  for (k = 0; k <= PVQ_UK + 2; k++) PU(0, k) = (k == 0);
+  Fk(PVQ_UK + 3, PU(0, k) = k == 0);
   for (n = 1; n <= PVQ_UN; n++) {
     PU(n, 0) = 0;
     for (k = 1; k <= PVQ_UK + 2; k++) {
@@ -637,11 +636,11 @@ static void pvq_dec(int n, int k, u32 i, int * y) {
   while (n > 2) {
     if (k >= n) {
       p = PU(n, k + 1);
-      s = (i >= p) ? -1 : 0;
+      s = i >= p ? -1 : 0;
       if (s) i -= p;
       k0 = k;
       q = PU(n, n);
-      if (q > i) { k = n;  do p = PU(--k, n); while (p > i); }
+      if (q > i) { k = n;  do p = PU(--k, n);  while (p > i); }
       else       { for (p = PU(n, k); p > i; p = PU(n, k)) k--; }
       i -= p;
       val = (k0 - k + s) ^ s;
@@ -650,10 +649,10 @@ static void pvq_dec(int n, int k, u32 i, int * y) {
       q = PU(k + 1, n);
       if (p <= i && i < q) { i -= p;  val = 0; }
       else {
-        s = (i >= q) ? -1 : 0;
+        s = i >= q ? -1 : 0;
         if (s) i -= q;
         k0 = k;
-        do p = PU(--k, n); while (p > i);
+        do p = PU(--k, n);  while (p > i);
         i -= p;
         val = (k0 - k + s) ^ s;
       }
@@ -661,7 +660,7 @@ static void pvq_dec(int n, int k, u32 i, int * y) {
     *y++ = val;  n--;
   }
   p = 2 * (u32) k + 1;
-  s = (i >= p) ? -1 : 0;
+  s = i >= p ? -1 : 0;
   if (s) i -= p;
   k0 = k;
   k = (int) ((i + 1) >> 1);
@@ -691,16 +690,15 @@ static u32 pvq_enc(int n, int k, const int * y) {
 
 /*  Build and cache the split prior for this geometry.  */
 static prior * prior_split(int n1, int n2, int K) {
-  okey key = ((okey) 0xA0000000UL << 32) | ((okey) n1 << 18)
-           | ((okey) n2 << 9) | (okey) K;
+  okey key = (okey) 0xA0000000UL << 32 | (okey) n1 << 18
+           | (okey) n2 << 9 | (okey) K;
   prior * p = pri_find(key);
   if (!p->f) {
     u32 raw[PVQ_UK + 2], ft;
     int j;
-    for (j = 0; j <= K; j++) {
+    Fj(K + 1,
       opus_uint64 t = (opus_uint64) pvq_V(n1, j) * (opus_uint64) pvq_V(n2, K - j);
-      raw[j] = t >= (opus_uint64) PVQ_UBAD ? PVQ_UBAD - 1 : (u32) t;
-    }
+      raw[j] = t >= (opus_uint64) PVQ_UBAD ? PVQ_UBAD - 1 : (u32) t);
     ft = pvq_V(n1 + n2, K);
     pri_build(p, key, raw, K + 1, ft, PVQ_SC);
   }
@@ -712,22 +710,20 @@ static void pvq_tree(int band, int N, int K, int dep, int * y) {
   int N1 = N / 2, N2 = N - N / 2, k = 0, j;
   u32 x;
   if (N < 2 || K == 0 || dep >= pvq_lev) {
-    x = (om_mode == OM_DEC) ? 0 : pvq_enc(N, K, y);
+    x = om_mode == OM_DEC ? 0 : pvq_enc(N, K, y);
     p_uniform(&x, pvq_V(N, K));
     if (om_mode == OM_DEC) pvq_dec(N, K, x, y);
     return;
   }
   if (om_mode != OM_DEC) Fj(N1, k += y[j] < 0 ? -y[j] : y[j]);
-  {
-    prior * pr = prior_split(N1, N2, K);
-    okey key = ((okey) 0x51000000UL << 32) | ((okey) dep << 12) | (okey) band;
-    ctx_code(ctx_find(key, pr), PVQ_INC, PVQ_CAP, &k);
-  }
+  { prior * pr = prior_split(N1, N2, K);
+    okey key = (okey) 0x51000000UL << 32 | (okey) dep << 12 | (okey) band;
+    ctx_code(ctx_find(key, pr), PVQ_INC, PVQ_CAP, &k); }
   pvq_tree(band, N1, k, dep + 1, y);
   pvq_tree(band, N2, K - k, dep + 1, y + N1);
 }
 
-static int clampb(int b) { return b < 0 ? 0 : (b >= NB ? NB - 1 : b); }
+static int clampb(int b) { return b < 0 ? 0 : b >= NB ? NB - 1 : b; }
 
 /*  Bucket small signed quantizer residuals around zero.  */
 static int q5of(int x) {
@@ -763,7 +759,7 @@ opus_int32 om_op(oprec * op) {
     okey id = stable ? tab_id(op->pdf, wide, op->ftb)
                      : tab_hash(op->pdf, wide, op->ftb);
     prior * pr = prior_icdf(id, op->pdf, wide, op->ftb);
-    okey key = id ^ ((okey) op->site << 40) ^ ((okey) site_hist[op->site] << 3);
+    okey key = id ^ (okey) op->site << 40 ^ (okey) site_hist[op->site] << 3;
     int v = op->v;
     ctx_code(ctx_find(key, pr), KP[op->kind].inc, KP[op->kind].cap, &v);
     op->v = v;
@@ -771,31 +767,31 @@ opus_int32 om_op(oprec * op) {
     break;
   }
   case OP_LOGP: {
-    okey key = ((okey) op->site << 20) ^ ((okey) op->ftb << 4)
+    okey key = (okey) op->site << 20 ^ (okey) op->ftb << 4
              ^ (okey) site_hist[op->site];
     unsigned logp = op->ftb;
     u16 init = (u16) (65535U - (65536U >> (logp > 15 ? 15 : logp)));
     int v = op->v;
     om_bit(key, init, &v);
     op->v = v;
-    site_hist[op->site] = (u8) (((site_hist[op->site] << 1) | v) & 3);
+    site_hist[op->site] = (u8) ((site_hist[op->site] << 1 | v) & 3);
     break;
   }
   case OP_LAPLACE: {
     /*  Coarse-energy context adds band, channel, frame shape, and neighbors.  */
     prior * pr = prior_laplace(op->aux, (int) op->ftb);
     int q5 = q5of(prev_qi[b][c]), n5 = q5of(band_qi[c]);
-    int x5 = (c && c0_qib == b) ? 1 + q5of(c0_qi) : 0;
-    okey key = ((okey) b << 16) | ((okey) c << 15)
-             | ((okey) (orec_intra & 1) << 14) | ((okey) (orec_LM & 3) << 12)
-             | ((okey) q5 << 9) | ((okey) n5 << 6) | (okey) x5;
+    int x5 = c && c0_qib == b ? 1 + q5of(c0_qi) : 0;
+    okey key = (okey) b << 16 | (okey) c << 15
+             | (okey) (orec_intra & 1) << 14 | (okey) (orec_LM & 3) << 12
+             | (okey) q5 << 9 | (okey) n5 << 6 | (okey) x5;
     int v = op->v, sym = v + LAPW;
     if (sym < 0 || sym >= LAPN - 1) sym = LAPN - 1;
     ctx_code(ctx_find(key, pr), KP[OP_LAPLACE].inc, KP[OP_LAPLACE].cap, &sym);
     if (sym == LAPN - 1) {
       /*  Escape values outside the modeled window.  */
-      u32 mag = (om_mode == OM_DEC) ? 0 : (u32) (v < 0 ? -v : v);
-      int sg = (om_mode == OM_DEC) ? 0 : (v < 0);
+      u32 mag = om_mode == OM_DEC ? 0 : (u32) (v < 0 ? -v : v);
+      int sg = om_mode == OM_DEC ? 0 : v < 0;
       om_bit((okey) 0xFEED0001UL, 0x8000, &sg);
       p_uniform(&mag, 1UL << 16);
       if (om_mode == OM_DEC) v = sg ? -(int) mag : (int) mag;
@@ -814,12 +810,12 @@ opus_int32 om_op(oprec * op) {
     okey key;
     if (qn < 1) qn = 1;
     pr = prior_theta(mode, qn);
-    key = ((okey) b << 24) | ((okey) mode << 22) | ((okey) bktN((int) op->aux) << 19)
-        | ((okey) (qn & 255) << 11) | (okey) (prev_theta[b] & 7);
+    key = (okey) b << 24 | (okey) mode << 22 | (okey) bktN((int) op->aux) << 19
+        | (okey) (qn & 255) << 11 | (okey) (prev_theta[b] & 7);
     ctx_code(ctx_find(key, pr), KP[OP_THETA].inc, KP[OP_THETA].cap, &v);
     op->v = v;
     PROF(prof_theta(b, mode, prev_theta[b], (u32) qn, op->aux, (i32) v));
-    prev_theta[b] = (v * 8) / (qn + 1);
+    prev_theta[b] = v * 8 / (qn + 1);
     break;
   }
   case OP_UINT: {
@@ -827,12 +823,12 @@ opus_int32 om_op(oprec * op) {
     if (orec_pvqK > 0 && V > 16) {
       /*  Consume PVQ geometry now and reuse only a matching alphabet.  */
       int nb = bktN(orec_pvqN), kb = bktK(orec_pvqK);
-      okey key = ((okey) 0x50000000UL << 32) | ((okey) b << 8)
-               | ((okey) nb << 4) | (okey) kb;
+      okey key = (okey) 0x50000000UL << 32 | (okey) b << 8
+               | (okey) nb << 4 | (okey) kb;
       u16 * p = bin_slot(key, (u16) (65535U - (65536U >> 10)));
       u32 last = last_pvq[b][nb][kb], x;
       int hv = have_pvq[b][nb][kb] && last_pvqV[b][nb][kb] == V;
-      int rep = (om_mode != OM_DEC) && hv && ((u32) op->v == last);
+      int rep = om_mode != OM_DEC && hv && (u32) op->v == last;
       if (hv) {
         p_bit(p, bincnt + (p - binp), &rep);
         if (rep) {
@@ -870,7 +866,7 @@ opus_int32 om_op(oprec * op) {
     }
     if (V <= 1024) {
       prior * pr = prior_uniform((int) V, KP[OP_UINT].scale);
-      okey key = ((okey) 0x60000000UL << 32) | ((okey) op->site << 20) | (okey) V;
+      okey key = (okey) 0x60000000UL << 32 | (okey) op->site << 20 | (okey) V;
       int v = op->v;
       ctx_code(ctx_find(key, pr), KP[OP_UINT].inc, KP[OP_UINT].cap, &v);
       op->v = v;
@@ -888,10 +884,10 @@ opus_int32 om_op(oprec * op) {
     if (nb > 0 && nb <= 8 && orec_ftb == (int) nb) {
       prior * pr = prior_uniform(1 << nb, KP[OP_BITS].scale);
       /*  Divide the unsigned alphabet into five equal buckets.  */
-      okey xf = (c && c0_fineb == b && c0_finen == (int) nb)
+      okey xf = c && c0_fineb == b && c0_finen == (int) nb
               ? 1 + ((okey) ((u32) c0_fine * 5) >> nb) : 0;
-      okey key = ((okey) 0x70000000UL << 32) | ((okey) b << 16) | ((okey) c << 15)
-               | ((okey) nb << 11) | (okey) (prev_fine[b][c] & 0x7FF) | (xf << 24);
+      okey key = (okey) 0x70000000UL << 32 | (okey) b << 16 | (okey) c << 15
+               | (okey) nb << 11 | (okey) (prev_fine[b][c] & 0x7FF) | xf << 24;
       int v = op->v;
       ctx_code(ctx_find(key, pr), KP[OP_BITS].inc, KP[OP_BITS].cap, &v);
       op->v = v;
@@ -950,7 +946,7 @@ typedef struct {
 } oc_pagehdr;
 
 static void byte_ctx(okey base, int slot, int prev, int * v) {
-  om_int(base | ((okey) slot << 16) | (okey) (prev & 0xFF), 256, 192, 28, 16384, v);
+  om_int(base | (okey) slot << 16 | (okey) (prev & 0xFF), 256, 192, 28, 16384, v);
 }
 
 /*  Store bytes changed by reconstruction.  */
@@ -974,7 +970,7 @@ void om_frame(u8 * buf, const u8 * mir, u32 n) {
   om_uni(&span, n - lo);
   hi = lo + span;
   for (i = lo; i <= hi; i++) {
-    int v = (om_mode == OM_DEC) ? 0 : buf[i];
+    int v = om_mode == OM_DEC ? 0 : buf[i];
     byte_ctx(K_FBYTE, 0, prev, &v);
     buf[i] = (u8) v;
     prev = v;
@@ -985,9 +981,9 @@ void om_frame(u8 * buf, const u8 * mir, u32 n) {
 static void resid(okey base, opus_int64 * v) {
   int zero, sg, nbits = 0;
   opus_uint64 mag, m2;
-  zero = (om_mode != OM_DEC) && (*v == 0);
-  sg = (om_mode != OM_DEC) && (*v < 0);
-  mag = (om_mode != OM_DEC) ? (sg ? 0 - (opus_uint64) *v : (opus_uint64) *v) : 0;
+  zero = om_mode != OM_DEC && *v == 0;
+  sg = om_mode != OM_DEC && *v < 0;
+  mag = om_mode != OM_DEC ? sg ? 0 - (opus_uint64) *v : (opus_uint64) *v : 0;
   om_bit(base | 1, 0x8000, &zero);
   if (zero) { if (om_mode == OM_DEC) *v = 0;  return; }
   om_bit(base | 2, 0x8000, &sg);
@@ -1001,11 +997,11 @@ static void resid(okey base, opus_int64 * v) {
       int k = sh > 16 ? 16 : sh;
       u32 part;
       sh -= k;
-      part = (om_mode == OM_DEC) ? 0 : (u32) ((mag >> sh) & ((1UL << k) - 1));
+      part = om_mode == OM_DEC ? 0 : (u32) (mag >> sh & ((1UL << k) - 1));
       om_uni(&part, (u32) 1 << k);
       m |= (opus_uint64) part << sh;
     }
-    if (om_mode == OM_DEC) mag = ((opus_uint64) 1 << nbits) | m;
+    if (om_mode == OM_DEC) mag = (opus_uint64) 1 << nbits | m;
   } else if (om_mode == OM_DEC) mag = 1;
   if (om_mode == OM_DEC) *v = (opus_int64) (sg ? 0 - mag : mag);
 }
@@ -1021,11 +1017,11 @@ static void oc_packet_hdr(oc_state * s, int * nhdr, u8 * hdr, int * len) {
   }
   *nhdr = v;  s->prev_nhdr = v;
   Fi(*nhdr,
-    int b = (om_mode == OM_DEC) ? 0 : hdr[i];
+    int b = om_mode == OM_DEC ? 0 : hdr[i];
     byte_ctx(i ? K_HDR : K_TOC, i < 8 ? i : 8, i < 8 ? s->prev_hdr[i] : 0, &b);
     hdr[i] = (u8) b;
     if (i < 8) s->prev_hdr[i] = (u8) b);
-  d = (om_mode == OM_DEC) ? 0 : (opus_int64) *len - (opus_int64) s->prev_len;
+  d = om_mode == OM_DEC ? 0 : (opus_int64) *len - (opus_int64) s->prev_len;
   resid(K_LEN, &d);
   if (om_mode == OM_DEC) {
     opus_int64 next = (opus_int64) s->prev_len + d;
@@ -1039,7 +1035,7 @@ static void oc_packet_hdr(oc_state * s, int * nhdr, u8 * hdr, int * len) {
 static void oc_packet_trailer(int n, u8 * t) {
   int i;
   Fi(n,
-    int b = (om_mode == OM_DEC) ? 0 : t[i];
+    int b = om_mode == OM_DEC ? 0 : t[i];
     byte_ctx(K_TRL, i < 8 ? i : 8, i ? t[i - 1] : 0, &b);
     t[i] = (u8) b);
 }
@@ -1055,39 +1051,39 @@ static void oc_blob(u8 * b, int * n) {
   }
   *n = v;
   Fi(*n,
-    int x = (om_mode == OM_DEC) ? 0 : b[i];
+    int x = om_mode == OM_DEC ? 0 : b[i];
     byte_ctx(K_RAW | 0x10000, 0, i ? b[i - 1] : 0, &x);
     b[i] = (u8) x);
 }
 
 static void oc_u32(u32 * v) {
-  u32 hi = (om_mode == OM_DEC) ? 0 : (*v >> 16), lo = (om_mode == OM_DEC) ? 0 : (*v & 0xFFFF);
+  u32 hi = om_mode == OM_DEC ? 0 : *v >> 16, lo = om_mode == OM_DEC ? 0 : *v & 0xFFFF;
   om_uni(&hi, 65536);  om_uni(&lo, 65536);
-  if (om_mode == OM_DEC) *v = (hi << 16) | lo;
+  if (om_mode == OM_DEC) *v = hi << 16 | lo;
 }
 
 static void oc_page(oc_state * s, oc_pagehdr * p) {
   int v;
   opus_int64 dd;
-  v = (om_mode == OM_DEC) ? 0 : p->htype;
+  v = om_mode == OM_DEC ? 0 : p->htype;
   om_int(K_HTYPE | (okey) s->prev_htype, 256, 192, 28, 16384, &v);
   p->htype = v;  s->prev_htype = v;
 
-  v = (om_mode == OM_DEC) ? 0 : p->nsegs;
+  v = om_mode == OM_DEC ? 0 : p->nsegs;
   om_int(K_NSEGS | (okey) s->prev_nsegs, 256, 192, 28, 16384, &v);
   p->nsegs = v;  s->prev_nsegs = v;
 
-  v = (om_mode == OM_DEC) ? 0 : (p->seqno == s->prev_seq + 1);
+  v = om_mode == OM_DEC ? 0 : p->seqno == s->prev_seq + 1;
   om_bit(K_SEQOK, 0xF000, &v);
   if (v) { if (om_mode == OM_DEC) p->seqno = s->prev_seq + 1; }
   else { u32 x = p->seqno;  oc_u32(&x);  p->seqno = x; }
   s->prev_seq = p->seqno;
 
-  v = (om_mode == OM_DEC) ? 0 : (p->granule == ~(opus_uint64) 0);
+  v = om_mode == OM_DEC ? 0 : p->granule == ~(opus_uint64) 0;
   om_bit(K_GDOK | 1, 0x0400, &v);
   if (v) { if (om_mode == OM_DEC) p->granule = ~(opus_uint64) 0;  return; }
   /*  Form arbitrary 64-bit granule residuals modulo 2^64.  */
-  dd = (om_mode == OM_DEC) ? 0
+  dd = om_mode == OM_DEC ? 0
      : (opus_int64) (p->granule - s->prev_gran - (opus_uint64) s->prev_gdelta);
   resid(K_GDELTA, &dd);
   if (om_mode == OM_DEC)
@@ -1099,7 +1095,7 @@ static void oc_page(oc_state * s, oc_pagehdr * p) {
 /*  Ogg framing over lacing values and packet boundaries.  */
 
 typedef struct { sz off, end;  int len; } opkt;
-typedef struct { int htype, nsegs; u32 seqno; opus_uint64 granule; } opage;
+typedef struct { int htype, nsegs;  u32 seqno;  opus_uint64 granule; } opage;
 
 typedef struct {
   opkt * pk;  int npk, pkcap;
@@ -1166,7 +1162,7 @@ static int parse_stream(blr_file * input, ostream * s) {
     s->pg[s->npg].htype = p.type;
     s->pg[s->npg].nsegs = p.nseg;
     s->pg[s->npg].seqno = p.seq;
-    s->pg[s->npg].granule = (opus_uint64) p.glo | ((opus_uint64) p.ghi << 32);
+    s->pg[s->npg].granule = (opus_uint64) p.glo | (opus_uint64) p.ghi << 32;
     /*  Chained Opus streams are unsupported.  */
     if (s->npg && p.serial != s->serial) {
       fprintf(stderr, "balrogg: chained Ogg Opus streams are unsupported\n");
@@ -1177,7 +1173,7 @@ static int parse_stream(blr_file * input, ostream * s) {
     Fi(p.nseg,
       int sl = p.lace[i];
       if (acclen + sl > OPUS_MAXPKT) { fprintf(stderr, "balrogg: over-long Opus packet\n");  goto bad; }
-      if (!acclen) { pstart = off + OGG_HDRMIN + p.nseg + (sz) boff; pend = off + got; }
+      if (!acclen) { pstart = off + OGG_HDRMIN + p.nseg + (sz) boff;  pend = off + got; }
       acclen += sl;  boff += sl;
       if (sl < 255) {
         if (s->npk == s->pkcap) {
@@ -1238,13 +1234,13 @@ static void page_flush(page_writer * w) {
   u8 * o = w->page;
   sz size = OGG_HDRMIN + (sz) p->nsegs + w->body;
   int k;
-  memcpy(o, "OggS", 4); o[4] = 0; o[5] = (u8) p->htype;
-  Fk(8, o[6 + k] = (u8) (p->granule >> (8 * k)));
-  Fk(4, o[14 + k] = (u8) (w->stream->serial >> (8 * k));
-        o[18 + k] = (u8) (p->seqno >> (8 * k)));
-  memset(o + 22, 0, 4); o[26] = (u8) p->nsegs;
-  ogg_crc_set(o, size); bf_write(w->output, w->output->len, o, size);
-  w->pg++; w->seg = 0; w->body = 0;
+  memcpy(o, "OggS", 4);  o[4] = 0;  o[5] = (u8) p->htype;
+  Fk(8, o[6 + k] = (u8) (p->granule >> 8 * k));
+  Fk(4, o[14 + k] = (u8) (w->stream->serial >> 8 * k);
+        o[18 + k] = (u8) (p->seqno >> 8 * k));
+  memset(o + 22, 0, 4);  o[26] = (u8) p->nsegs;
+  ogg_crc_set(o, size);  bf_write(w->output, w->output->len, o, size);
+  w->pg++;  w->seg = 0;  w->body = 0;
 }
 
 static void page_empty(page_writer * w) {
@@ -1261,7 +1257,7 @@ static void page_packet(page_writer * w, const u8 * packet, sz len) {
     take = MIN(len, (sz) 255);
     w->page[OGG_HDRMIN + w->seg++] = (u8) take;
     memcpy(w->page + OGG_HDRMIN + ns + w->body, packet, take);
-    w->body += take; packet += take; len -= take;
+    w->body += take;  packet += take;  len -= take;
     if (w->seg == ns) page_flush(w);
   } while (take == 255);
 }
@@ -1281,24 +1277,24 @@ int opus_pack(const char * in, const char * out, int lev) {
   FATAL_UNLESS(lev >= 0 && lev <= PVQ_LEVMAX, "opus: level %d is out of range", lev);
   pvq_lev = lev;
   memset(&e, 0, sizeof e);
-  arc_init(&a, (u8) (0x09 | ARC_OPUS | (lev << 5)));
+  arc_init(&a, (u8) (0x09 | ARC_OPUS | lev << 5));
   if (parse_stream(input, &s)) goto done;
   blr_progress_begin(in, "encoding", (sz) s.npk);
   /*  Match the decoder's count limits.  */
-  if (s.npk > (1L << 24) || s.npg > (1L << 24)) {
+  if (s.npk > 1L << 24 || s.npg > 1L << 24) {
     fprintf(stderr, "balrogg: %s has %d packets on %d pages, limit %ld\n",
             in, s.npk, s.npg, 1L << 24);
     goto done;
   }
 
-  output = bf_open(out, 1); arc_begin(&a, output);
+  output = bf_open(out, 1);  arc_begin(&a, output);
   orc_enc_init(&e, arc_newstream(&a));
   om_init();  om_mode = OM_ENC;  E = &e;  D = NULL;
   memset(&cs, 0, sizeof cs);
 
   u = (u32) s.npk;  oc_u32(&u);
   u = (u32) s.npg;  oc_u32(&u);
-  u = s.serial;     oc_u32(&u);
+  u = s.serial;  oc_u32(&u);
   Fi(s.npg,
     oc_pagehdr p;
     p.htype = s.pg[i].htype;  p.nsegs = s.pg[i].nsegs;
@@ -1334,13 +1330,13 @@ int opus_pack(const char * in, const char * out, int lev) {
     blr_progress_update((sz) i + 1);
   }
 
-  orc_enc_done(&e); arc_finish(&a);
+  orc_enc_done(&e);  arc_finish(&a);
   rc = BLR_EXIT_OK;
 done:
   if (rc) blr_progress_cancel();
   if (dec) opus_decoder_destroy(dec);
-  orc_enc_free(&e); arc_free(&a); bf_close(output);
-  bf_close(input); free(packet); st_free(&s); om_free();
+  orc_enc_free(&e);  arc_free(&a);  bf_close(output);
+  bf_close(input);  free(packet);  st_free(&s);  om_free();
   if (!rc) blr_progress_end();
   return rc;
 }
@@ -1371,7 +1367,7 @@ int opus_unpack(const char * in, const char * out) {
   memset(&cs, 0, sizeof cs);
 
   oc_u32(&u);
-  if (u < 2 || u > (1UL << 24)) {
+  if (u < 2 || u > 1UL << 24) {
     fprintf(stderr, "balrogg: %s invalid packet count %lu\n", in,
             (unsigned long) u);
     goto done;
@@ -1379,7 +1375,7 @@ int opus_unpack(const char * in, const char * out) {
   s.npk = (int) u;
   blr_progress_begin(in, "decoding", (sz) s.npk);
   oc_u32(&u);
-  if (u < 1 || u > (1UL << 24)) {
+  if (u < 1 || u > 1UL << 24) {
     fprintf(stderr, "balrogg: %s invalid page count %lu\n", in,
             (unsigned long) u);
     goto done;
@@ -1396,7 +1392,7 @@ int opus_unpack(const char * in, const char * out) {
     s.pg[i].htype = p.htype;  s.pg[i].nsegs = p.nsegs;
     s.pg[i].seqno = p.seqno;  s.pg[i].granule = p.granule);
 
-  output = bf_open(out, 1); w.output = output; w.stream = &s;
+  output = bf_open(out, 1);  w.output = output;  w.stream = &s;
   w.page = xmalloc(OGG_HDRMIN + OGG_MAXSEG + 65025);
 
   Fi(2,
@@ -1404,11 +1400,11 @@ int opus_unpack(const char * in, const char * out) {
     oc_blob(packet, &n);
     if (!i) {
       if (n < 19 || memcmp(packet, "OpusHead", 8)) {
-        fprintf(stderr, "balrogg: %s has no OpusHead\n", in); goto done;
+        fprintf(stderr, "balrogg: %s has no OpusHead\n", in);  goto done;
       }
       s.channels = packet[9];
       if (s.channels < 1 || s.channels > 2) {
-        fprintf(stderr, "balrogg: %s invalid channel count %d\n", in, s.channels); goto done;
+        fprintf(stderr, "balrogg: %s invalid channel count %d\n", in, s.channels);  goto done;
       }
     }
     page_packet(&w, packet, (sz) n));
@@ -1454,8 +1450,8 @@ int opus_unpack(const char * in, const char * out) {
 done:
   if (rc) blr_progress_cancel();
   if (dec) opus_decoder_destroy(dec);
-  bf_close(output); free(w.page);
-  bf_close(input); free(packet); arc_free(&a); st_free(&s); om_free();
+  bf_close(output);  free(w.page);
+  bf_close(input);  free(packet);  arc_free(&a);  st_free(&s);  om_free();
   if (!rc) blr_progress_end();
   return rc;
 }

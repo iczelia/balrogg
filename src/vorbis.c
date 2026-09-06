@@ -97,7 +97,7 @@ void vb_init(vb_ctx * v) {
   memset(v->nv1, 0, sizeof v->nv1);  memset(v->nidx, 0, sizeof v->nidx);
   memset(v->nrun, 0, sizeof v->nrun);
   v->nxv = 0;  v->npch = -1;  v->nstarted = 0;
-  v->symbols = NULL; v->nsymbols = v->csymbols = 0; v->symfull = 0;
+  v->symbols = NULL;  v->nsymbols = v->csymbols = 0;  v->symfull = 0;
   v->ys = NULL;  v->ysn = 0;  v->cs = NULL;  v->csn = 0;
   memset(v->fpl, 0, sizeof v->fpl);
   v->hu = 0;  v->psl = 0;
@@ -129,7 +129,7 @@ void vb_tune_get(vb_tune * t, const u8 * p, sz n) {
 }
 
 static void bk_free(vb_book * b) {
-  free(b->fast); free(b->fastbits);
+  free(b->fast);  free(b->fastbits);
   free(b->len);  free(b->code);  free(b->nd);  free(b->mult);  free(b->inv);
 }
 
@@ -151,7 +151,7 @@ void vb_free(vb_ctx * v) {
   free(v->ar);  v->ar = NULL;
   free(v->mem);  v->mem = NULL;
   free(v->clsm);  v->clsm = NULL;
-  free(v->symbols); v->symbols = NULL;
+  free(v->symbols);  v->symbols = NULL;
   free(v->ys);  v->ys = NULL;  free(v->cs);  v->cs = NULL;
   v->ysn = v->csn = 0;
 }
@@ -236,7 +236,7 @@ static const u8 RST[] = {
 
 typedef struct {
   int enc;
-  int replay; sz symbol;
+  int replay;  sz symbol;
   int probe, rawpkt, choices; /*  syntax-only traversal, peeling, floor choices  */
   rc_enc * e[3];
   rc_dec * d[3];
@@ -261,23 +261,25 @@ static u32 bget(io * z, int n) {
     z->rawpkt = 1;  return 0;
   }
   FATAL_IF_HOT(z->pos + (sz) n > z->len * 8)("vorbis: packet ends inside a field");
-  for (i = 0; i < n; i++, z->pos++)
-    r |= (u32) ((z->b[z->pos >> 3] >> (z->pos & 7)) & 1) << i;
+  Fi(n,
+    r |= (u32) (z->b[z->pos >> 3] >> (z->pos & 7) & 1) << i;
+    z->pos++);
   return r;
 }
 
 static void bput(io * z, int n, u32 v) {
   int i;
   FATAL_IF_HOT(z->pos + (sz) n > z->len * 8)("vorbis: packet ends inside a field");
-  for (i = 0; i < n; i++, z->pos++)
-    z->b[z->pos >> 3] |= (u8) (((v >> i) & 1) << (z->pos & 7));
+  Fi(n,
+    z->b[z->pos >> 3] |= (u8) ((v >> i & 1) << (z->pos & 7));
+    z->pos++);
 }
 
 /*  One-bit codeword steps.  */
 static INLINE u32 bget1(io * z) {
   u32 r;
   FATAL_IF_HOT(z->pos >= z->len * 8)("vorbis: packet ends inside a codeword");
-  r = (z->b[z->pos >> 3] >> (z->pos & 7)) & 1;
+  r = z->b[z->pos >> 3] >> (z->pos & 7) & 1;
   z->pos++;
   return r;
 }
@@ -299,10 +301,10 @@ static u32 mv(io * z, int s, int k, u32 v, u32 p) {
 static u32 tv(io * z, int st, u16 * s, u8 * c, int d, u32 v) {
   u32 idx = 1;
   int i;
-  FATAL_UNLESS(!z->enc || v < (1UL << d), "vorbis: %lu does not fit a %d-bit "
+  FATAL_UNLESS(!z->enc || v < 1UL << d, "vorbis: %lu does not fit a %d-bit "
                "tree", (unsigned long) v, d);
   for (i = d - 1; i >= 0; i--)
-    idx = idx * 2 + (u32) cbit(z, st, s + idx, c + idx, (int) ((v >> i) & 1));
+    idx = idx * 2 + (u32) cbit(z, st, s + idx, c + idx, (int) (v >> i & 1));
   return idx - (1UL << d);
 }
 
@@ -369,7 +371,7 @@ static void bk_words(vb_book * b) {
       mk[j]++;
     }
     for (j = l + 1; j < 33; j++) {
-      if ((mk[j] >> 1) != e) break;
+      if (mk[j] >> 1 != e) break;
       e = mk[j];  mk[j] = mk[j - 1] << 1;
     });
 }
@@ -388,7 +390,7 @@ static void bk_tree(vb_book * b) {
     if (!b->len[i]) continue;
     idx = 0;
     for (k = b->len[i]; k > 1; k--) {
-      u32 c = 2 * idx + ((b->code[i] >> (k - 1)) & 1);
+      u32 c = 2 * idx + (b->code[i] >> (k - 1) & 1);
       t = b->nd[c];
       if (!t) { FATAL_UNLESS(n < cap, "vorbis: codebook tree overflows");
                 t = (i32) n++;  b->nd[c] = t; }
@@ -522,7 +524,7 @@ static u32 flt(io * z, int expblk, int sgn) {
   u32 w = z->enc ? bget(z, 32) : 0, s, e, m;
   s = tv(z, S_BULK, z->v->f + sgn, z->v->fc + sgn, 1,
          z->enc ? w >> 31 : 0);
-  e = mv(z, S_BULK, expblk, z->enc ? (w >> 21) & 0x3FF : 0, 0);
+  e = mv(z, S_BULK, expblk, z->enc ? w >> 21 & 0x3FF : 0, 0);
   m = mv(z, S_BULK, M_FMANT, z->enc ? w & 0x1FFFFF : 0, 0);
   w = (s << 31) | ((e & 0x3FF) << 21) | (m & 0x1FFFFF);
   if (!z->enc) bput(z, 32, w);
@@ -531,7 +533,7 @@ static u32 flt(io * z, int expblk, int sgn) {
 
 /*  Normalize a Vorbis float32 for numeric comparison.  */
 static void f32(vb_book * b, u32 w) {
-  b->dm = w & 0x1FFFFF;  b->de = (int) ((w >> 21) & 0x3FF) - 788;
+  b->dm = w & 0x1FFFFF;  b->de = (int) (w >> 21 & 0x3FF) - 788;
   b->ds = (int) (w >> 31);
   if (!b->dm) { b->de = 0;  b->ds = 0;  return; }
   while (!(b->dm & 1)) { b->dm >>= 1;  b->de++; }
@@ -553,7 +555,7 @@ static void codebooks(io * z) {
     /*  ent == 0 is accepted by libvorbis; dim == 0 divides by zero.  */
     FATAL_UNLESS(k->dim > 0, "vorbis: codebook %lu has dimension 0",
                  (unsigned long) j);
-    FATAL_UNLESS(k->ent <= (1UL << 20), "vorbis: codebook %lu has %lu entries",
+    FATAL_UNLESS(k->ent <= 1UL << 20, "vorbis: codebook %lu has %lu entries",
                  (unsigned long) j, (unsigned long) k->ent);
     /*  Enforce libvorbis's joint dimension and entry bound.  */
     FATAL_UNLESS(blr_ilog(k->dim) + blr_ilog(k->ent) <= 24,
@@ -576,9 +578,9 @@ static void codebooks(io * z) {
     k->mult = xmalloc((k->nv ? k->nv : 1) * sizeof *k->mult);
     /*  Predict libvorbis's centered zigzag multiplicands. Use M_MULTW when a
         value can exceed M_MULT's residual range.  */
-    mk = (vb > 8 || k->nv > 0x100) ? M_MULTW : M_MULT;
+    mk = vb > 8 || k->nv > 0x100 ? M_MULTW : M_MULT;
     Fi(k->nv, k->mult[i] = fld(z, mk, (int) vb,
-                               (i & 1) ? (k->nv >> 1) - (i + 1) / 2
+                               i & 1 ? (k->nv >> 1) - (i + 1) / 2
                                        : (k->nv >> 1) + i / 2));
     FATAL_UNLESS(k->nv > 0, "vorbis: codebook %lu has an empty lookup table",
                  (unsigned long) j);
@@ -677,7 +679,7 @@ static void residues(io * z) {
       });
     Fi(q->ncl, Fj(8,
       q->book[i][j] = -1;
-      if (!(q->casc[i] & (1UL << j))) continue;
+      if (!(q->casc[i] & 1UL << j)) continue;
       v = fld(z, M_RBOOK, 8, m0 + m1);  m1 = v - m0;  m0 = v;
       q->book[i][j] = (i32) v)));
 }
@@ -767,7 +769,7 @@ static void comment(io * z) {
     s = z->v->cmt + bank * VB_CSIZE;  idx = 1;
     sc = z->v->cmtc + bank * VB_CSIZE;
     for (k = 7; k >= 0; k--) {
-      b = cbit(z, S_BULK, s + idx, sc + idx, (z->b[i] >> k) & 1);
+      b = cbit(z, S_BULK, s + idx, sc + idx, z->b[i] >> k & 1);
       idx = idx * 2 + (u32) b;
     }
     prev = idx - VB_CSIZE;
@@ -789,19 +791,17 @@ static void su_check(vb_setup * s) {
       FATAL_UNLESS(s->fl[i].csb[j][k] < (i32) s->nbk, "vorbis: floor subclass "
                    "book %ld", (long) s->fl[i].csb[j][k]))));
   Fi(s->nrs,
-    u32 c, p;
+    u32 k;
     FATAL_UNLESS(s->rs[i].cbook < s->nbk, "vorbis: residue class book %lu",
                  (unsigned long) s->rs[i].cbook);
     FATAL_UNLESS(s->rs[i].ncl <= 16,
                  "vorbis: %lu residue classifications, limit 16",
                  (unsigned long) s->rs[i].ncl);
-    for (c = 0; c < s->rs[i].ncl; c++)
-      for (p = 0; p < 8; p++) {
-        i32 b = s->rs[i].book[c][p];
-        FATAL_UNLESS(b < (i32) s->nbk, "vorbis: residue book %ld", (long) b);
-        FATAL_UNLESS(b < 0 || s->bk[b].look == 1, "vorbis: residue book %ld has "
-                     "no lookup table", (long) b);
-      });
+    Fj(s->rs[i].ncl, Fk(8,
+      i32 b = s->rs[i].book[j][k];
+      FATAL_UNLESS(b < (i32) s->nbk, "vorbis: residue book %ld", (long) b);
+      FATAL_UNLESS(b < 0 || s->bk[b].look == 1, "vorbis: residue book %ld has "
+                   "no lookup table", (long) b))));
   Fi(s->nmd, FATAL_UNLESS(s->mdmap[i] < s->nmp, "vorbis: mode %lu names mapping "
                           "%d", (unsigned long) i, s->mdmap[i]));
   Fi(s->nmp, Fj(s->mp[i].sub,
@@ -841,7 +841,7 @@ static void hdr(io * z, int which) {
 static void ioinit(io * z, vb_ctx * v, int enc, u8 * pkt, sz len) {
   sz i;
   z->enc = enc;  z->v = v;  z->b = pkt;  z->len = len;  z->pos = 0;
-  z->probe = z->rawpkt = z->replay = z->choices = 0; z->symbol = 0;
+  z->probe = z->rawpkt = z->replay = z->choices = 0;  z->symbol = 0;
   Fi(3, z->e[i] = NULL;  z->d[i] = NULL);
 }
 
@@ -910,11 +910,11 @@ static INLINE int abit(io * z, u32 at, int lim, int b) {
 
 /*  Seed shared tables now and slot tables on demand.  */
 static void arena(vb_ctx * v) {
-  u32 t, at = 0;
+  u32 i, at = 0;
   if (v->ar) return;
-  for (t = 0; t < A_NGLOB; t++) { v->ab[t] = at;  at += AR_SIZE[t]; }
+  Fi(A_NGLOB, v->ab[i] = at;  at += AR_SIZE[i]);
   v->aglob = at;
-  for (at = 0, t = A_NGLOB; t < A_NTAB; t++) { v->ab[t] = at;  at += AR_SIZE[t]; }
+  for (at = 0, i = A_NGLOB; i < A_NTAB; i++) { v->ab[i] = at;  at += AR_SIZE[i]; }
   v->astep = at;
   v->arn = (sz) v->aglob + (sz) v->ns * v->astep;
   v->ar = xcalloc((v->arn + VB_APSIZE - 1) / VB_APSIZE, sizeof *v->ar);
@@ -962,14 +962,13 @@ static u32 * scratch(u32 ** p, sz * have, sz want) {
 /* Small prefix tables replace most bit-at-a-time codeword walks. */
 static void bk_fast(vb_book * b) {
   u32 i, j;
-  b->fast = xmalloc(256 * sizeof *b->fast); b->fastbits = xmalloc(256);
+  b->fast = xmalloc(256 * sizeof *b->fast);  b->fastbits = xmalloc(256);
   Fi(256,
     i32 t = 0;
-    for (j = 0; j < 8; j++) {
-      t = b->nd[2 * (u32) t + ((i >> j) & 1)];
-      if (t <= 0) { j++; break; }
-    }
-    b->fast[i] = t; b->fastbits[i] = (u8) j);
+    Fj(8,
+      t = b->nd[2 * (u32) t + (i >> j & 1)];
+      if (t <= 0) { j++;  break; });
+    b->fast[i] = t;  b->fastbits[i] = (u8) j);
 }
 
 /* Cache only one packet's parsed symbols, capped at 256 KiB. Large unusual
@@ -978,23 +977,23 @@ static u32 bk_get(io * z, vb_book * b) {
   u32 idx = 0, e;
   i32 t;
   if (z->replay) {
-    e = z->v->symbols[z->symbol++]; z->pos += b->len[e]; return e;
+    e = z->v->symbols[z->symbol++];  z->pos += b->len[e];  return e;
   }
   if (z->len * 8 - z->pos >= 8) {
     sz at = z->pos >> 3;
     unsigned shift = (unsigned) (z->pos & 7);
     u32 prefix = z->b[at];
     if (shift) prefix |= (u32) z->b[at + 1] << 8;
-    prefix = (prefix >> shift) & 255;
+    prefix = prefix >> shift & 255;
     if (!b->fast) bk_fast(b);
-    t = b->fast[prefix]; z->pos += b->fastbits[prefix];
+    t = b->fast[prefix];  z->pos += b->fastbits[prefix];
     FATAL_IF_HOT(t == 0)("vorbis: the packet holds no such codeword");
     if (t < 0) goto found;
     idx = (u32) t;
   }
   for (;;) {
     if (z->probe && z->pos >= z->len * 8) {
-      z->rawpkt = 1; return 0;
+      z->rawpkt = 1;  return 0;
     }
     t = b->nd[2 * idx + bget1(z)];
     FATAL_IF_HOT(t == 0)("vorbis: the packet holds no such codeword");
@@ -1006,7 +1005,7 @@ found:
   if (z->probe && !z->v->symfull) {
     vb_ctx * v = z->v;
     if (v->nsymbols == v->csymbols) {
-      if (v->csymbols == (1UL << 16)) { v->symfull = 1; return e; }
+      if (v->csymbols == 1UL << 16) { v->symfull = 1;  return e; }
       v->csymbols = v->csymbols ? v->csymbols * 2 : 256;
       v->symbols = xrealloc(v->symbols, v->csymbols * sizeof *v->symbols);
     }
@@ -1019,7 +1018,7 @@ static void bk_put(io * z, vb_book * b, u32 e) {
   u32 k;
   FATAL_UNLESS(e < b->ent && b->len[e], "vorbis: codebook has no entry %lu",
                (unsigned long) e);
-  for (k = b->len[e]; k > 0; k--) bput1(z, (b->code[e] >> (k - 1)) & 1);
+  for (k = b->len[e]; k > 0; k--) bput1(z, b->code[e] >> (k - 1) & 1);
 }
 
 /*  Code Floor 1 posts in ascending X order. Contexts include zero history,
@@ -1046,14 +1045,14 @@ static u32 fl_val(io * z, u32 f, u32 i, u8 * h, u32 v) {
   idx = 1;
   for (k = 3; k > 0; k--)
     idx = idx * 2 + (u32) abit(z, o + idx, n->t.alim,
-                              (int) ((nb >> (k - 1)) & 1));
+                              (int) (nb >> (k - 1) & 1));
   nb = idx - 8;  *pl = (u8) nb;
   o = atab(n, A_FMAG, ((f * VB_MAXPOST + i) * AR_TRI + AR_TRIB[nb]) * AR_LOW2);
   PROF(prof_site = P_FMAG);
   r = 1;
   for (k = nb; k > 0; k--) {
     b = abit(z, o + (nb - k) * AR_LOW2 + a, n->t.alim,
-             (int) ((v >> (k - 1)) & 1));
+             (int) (v >> (k - 1) & 1));
     r = r * 2 + (u32) b;  a = (a * 2 + (u32) b) & 3;
   }
   PROF(prof_floor((int) f, (int) prof_ch, e_h, (int) i, e_pl, (i32) r));
@@ -1063,7 +1062,7 @@ static u32 fl_val(io * z, u32 f, u32 i, u8 * h, u32 v) {
 
 static int fl_get(io * z, vb_floor * f, u32 * y, u32 * classes) {
   vb_setup * s = z->v->cur;
-  u32 i, k, j = 2, p, cd, cs, cv;
+  u32 i, k, post = 2, p, cd, cs, cv;
   if (!bget(z, 1)) return 0;
   p = blr_ilog(f->quant - 1);
   y[0] = bget(z, p);  y[1] = bget(z, p);
@@ -1077,17 +1076,16 @@ static int fl_get(io * z, vb_floor * f, u32 * y, u32 * classes) {
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      y[j + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
+      y[post + k] = b >= 0 ? bk_get(z, s->bk + b) : 0;
       if (z->rawpkt) return 0);
     /* Record whether the value model needs a classword correction. */
-    if (cv0 >> (cs * cd)) z->choices = 1;
+    if (cv0 >> cs * cd) z->choices = 1;
     Fk(cd,
-      u32 l, d = (cv0 >> (k * cs)) & ((1UL << cs) - 1);
-      for (l = 0; l < d; l++) {
-        u32 mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
-        if (y[j + k] < mx) z->choices = 1;
-      });
-    j += cd);
+      u32 j, d = cv0 >> k * cs & ((1UL << cs) - 1);
+      Fj(d,
+        u32 mx = f->csb[c][j] < 0 ? 1 : s->bk[f->csb[c][j]].ent;
+        if (y[post + k] < mx) z->choices = 1));
+    post += cd);
   return 1;
 }
 
@@ -1096,25 +1094,24 @@ static int fl_get(io * z, vb_floor * f, u32 * y, u32 * classes) {
 static void fl_put(io * z, vb_floor * f, const u32 * y, int used,
                     const u32 * classes) {
   vb_setup * s = z->v->cur;
-  u32 i, k, l, j = 2, p, cd, cs, cv, mx;
+  u32 i, k, j, post = 2, p, cd, cs, cv, mx;
   if (!z->enc) bput(z, 1, (u32) used);
   if (!used) return;
   p = blr_ilog(f->quant - 1);
-  FATAL_UNLESS(y[0] < (1UL << p) && y[1] < (1UL << p),
+  FATAL_UNLESS(y[0] < 1UL << p && y[1] < 1UL << p,
                "vorbis: floor post does not fit %lu bits", (unsigned long) p);
-  if (!z->enc) { bput(z, p, y[0]); bput(z, p, y[1]); }
+  if (!z->enc) { bput(z, p, y[0]);  bput(z, p, y[1]); }
   Fi(f->parts,
     u32 c = f->pcls[i];
     cd = f->cdim[c];  cs = f->csub[c];  cv = 0;
     if (cs) {
       Fk(cd,
-        for (l = 0; l < (1UL << cs); l++) {
-          mx = f->csb[c][l] < 0 ? 1 : s->bk[f->csb[c][l]].ent;
-          if (y[j + k] < mx) break;
-        }
-        FATAL_UNLESS(l < (1UL << cs), "vorbis: no class %lu book fits value %lu",
-                     (unsigned long) c, (unsigned long) y[j + k]);
-        cv |= l << (k * cs));
+        Fj(1UL << cs,
+          mx = f->csb[c][j] < 0 ? 1 : s->bk[f->csb[c][j]].ent;
+          if (y[post + k] < mx) break);
+        FATAL_UNLESS(j < 1UL << cs, "vorbis: no class %lu book fits value %lu",
+                     (unsigned long) c, (unsigned long) y[post + k]);
+        cv |= j << k * cs);
       if (z->choices)
         cv = mv(z, S_BULK, M_FCLASS, z->enc ? classes[i] : 0, cv);
       if (!z->enc) bk_put(z, s->bk + f->cbook[c], cv);
@@ -1122,8 +1119,8 @@ static void fl_put(io * z, vb_floor * f, const u32 * y, int used,
     Fk(cd,
       i32 b = f->csb[c][cv & ((1UL << cs) - 1)];
       cv >>= cs;
-      if (!z->enc && b >= 0) bk_put(z, s->bk + b, y[j + k]));
-    j += cd);
+      if (!z->enc && b >= 0) bk_put(z, s->bk + b, y[post + k]));
+    post += cd);
 }
 
 /*  Store each residue entry as centered base-`nv` multiplicand digits.  */
@@ -1185,7 +1182,7 @@ static u32 rs_cls(io * z, u32 q, u32 ch, u32 p, u32 v) {
   PROF(prof_site = P_CLASS);
   for (k = 4; k > 0; k--)
     idx = idx * 2 + (u32) abit(z, o + idx, n->t.alim,
-                               (int) ((v >> (k - 1)) & 1));
+                               (int) (v >> (k - 1) & 1));
   /*  Read before write: within one packet each partition is visited once, so
       what *mc held on the way in is the previous packet's class.  */
   *mc = (u8) (!(n->t.flags & VB_TF_CLS) ? 0
@@ -1221,7 +1218,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   m = *mr;  il = blr_ilog(c);
   ax = q;                                       /*  A_RZERO  */
   ax = ax * 2 + (n->psl == b->slot);
-  ax = ax * 2 + (!(m & 7));
+  ax = ax * 2 + !(m & 7);
   ax = ax * 2 + la;
   ax = ax * AR_NBIN + c / 4;
   o = mb + atab(n, A_RZERO, ax * AR_NCH + ch);
@@ -1233,7 +1230,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
     c1 = n->nrun[ch] >= 1 ? mcls(n->nv0[ch]) : 0;
 
     /*  For interleaved residue, cx is the other channel at this bin.  */
-    cx = (n->nstarted && (u32) n->npch != ch) ? mcls(n->nxv) : 0;
+    cx = n->nstarted && (u32) n->npch != ch ? mcls(n->nxv) : 0;
     memf = (int) ((m & 3) + 4 * (m >> 7));
     psel = ((c1 * 5 + cx) * 2 + (int) (ch & 1)) * 4 + (int) (m & 3);
     pslot = b->slot;
@@ -1250,7 +1247,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   n->psl = b->slot;
   if (!t) {
     n->fh[ch] = 0;  n->mh[ch] = 0;  *mw = 0;
-    if (n->cm_mask && (n->t.flags & VB_TF_MATCH)) cm_match_push(&n->cm, 0);
+    if (n->cm_mask && n->t.flags & VB_TF_MATCH) cm_match_push(&n->cm, 0);
     PROF(prof_res((int) b->slot, (int) q, (int) pass, (int) ch, c, (int) m,
                   (int) la, e_sh, e_mh, 0));
     PROF(prof_site = P_VOTHER);
@@ -1261,7 +1258,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   if (z->enc) mag = (u32) (v < 0 ? -v : v);
   ax = q;                                       /*  A_RSIGN  */
   ax = ax * 2 + (m != 0);
-  ax = ax * 2 + ((m >> 7) & 1);
+  ax = ax * 2 + (m >> 7 & 1);
   ax = ax * 2 + la;
   ax = ax * AR_HIST2 + n->sh[ch];
   ax = ax * AR_ILOG + il;
@@ -1292,8 +1289,8 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
     idx = 1;
     { PHASHES(h3, 3);
       for (k = 3; k > 0; k--) {
-        mex = mok ? (int) ((pnb >> (k - 1)) & 1) : -1;
-        t = RBIT(o + idx, 3, h3, (int) ((nb >> (k - 1)) & 1));
+        mex = mok ? (int) (pnb >> (k - 1) & 1) : -1;
+        t = RBIT(o + idx, 3, h3, (int) (nb >> (k - 1) & 1));
         if (t != mex) mok = 0;
         idx = idx * 2 + (u32) t;
       } }
@@ -1305,8 +1302,8 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
     a = 1;
     { PHASHES(h4, 4);
       for (k = nb + 1; k > 0; k--) {
-        mex = mok ? (int) ((pm >> (k - 1)) & 1) : -1;
-        t = RBIT(o + (a & 3), 4, h4, (int) ((mag >> (k - 1)) & 1));
+        mex = mok ? (int) (pm >> (k - 1) & 1) : -1;
+        t = RBIT(o + (a & 3), 4, h4, (int) (mag >> (k - 1) & 1));
         if (t != mex) mok = 0;
         a = a * 2 + (u32) t;
       } }
@@ -1377,7 +1374,7 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
   vb_setup * s = z->v->cur;
   vb_res * r = s->rs + rno;
   vb_book * cb = s->bk + r->cbook;
-  u32 q = rno & 3, il = 0, vch, end, np, pv, pass, pc, i, j, k, cw, w;
+  u32 q = rno & 3, il = 0, vch, end, np, pv, pc, i, j, k, cw, w;
   u32 * cl;
   u32 nc = 0;
   Fi(nch, if (nz[i]) nc++);
@@ -1390,10 +1387,10 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
   pv = cb->dim;
   w = np + pv;
   cl = scratch(&z->v->cs, &z->v->csn, (sz) vch * w);
-  for (pass = 0; pass < 8; pass++) {
+  Fi(8,
     pc = 0;
     while (pc < np) {
-      if (!pass)
+      if (!i)
         Fj(vch,
           if (z->enc) {
             cw = bk_get(z, cb);
@@ -1418,14 +1415,13 @@ static void residue(io * z, u32 rno, const u8 * nz, u32 nch, u32 n) {
           FATAL_IF_HOT(cl[j * w + pc] >= r->ncl)
             ("vorbis: residue class %lu, limit %lu",
              (unsigned long) cl[j * w + pc], (unsigned long) r->ncl);
-          bn = r->book[cl[j * w + pc]][pass];
+          bn = r->book[cl[j * w + pc]][i];
           PROF(prof_rcls = cl[j * w + pc];  prof_rpart = pc);
           if (bn >= 0)
-            rs_part(z, r, s->bk + bn, q, pass, r->beg + pc * r->psz, il);
+            rs_part(z, r, s->bk + bn, q, i, r->beg + pc * r->psz, il);
           if (z->rawpkt) return);
         pc++);
-    }
-  }
+    });
 }
 
 /*  Process floor curves, coupling, and residues for one audio packet.  */
@@ -1475,7 +1471,7 @@ static void payload(io * z, u32 mode) {
 static int audio_type(io * z) {
   io p = *z;
   u32 md;
-  p.probe = 1; z->v->nsymbols = 0; z->v->symfull = 0;
+  p.probe = 1;  z->v->nsymbols = 0;  z->v->symfull = 0;
   FATAL_UNLESS(z->v->cur && z->v->cur->nmd, "vorbis: audio before setup");
   FATAL_UNLESS(bget(&p, 1) == 0, "vorbis: header on audio path");
   md = bget(&p, (int) blr_ilog(z->v->cur->nmd - 1));
@@ -1485,7 +1481,7 @@ static int audio_type(io * z) {
   payload(&p, md);
   if (p.rawpkt) return 1;
   return (p.choices ? 2 : 0) |
-    ((p.len * 8 - p.pos >= 8 || bget(&p, (int) (p.len * 8 - p.pos))) ? 4 : 0);
+    (p.len * 8 - p.pos >= 8 || bget(&p, (int) (p.len * 8 - p.pos)) ? 4 : 0);
 }
 
 /* Model exceptional bytes and padding using the existing small byte-context
@@ -1498,7 +1494,7 @@ static sz packet_tail(io * z) {
     u32 bank = MIN(prev >> 4, VB_CBANK - 1) * VB_CSIZE;
     for (k = n - 1; k >= 0; k--)
       idx = idx * 2 + (u32) cbit(z, S_BULK, z->v->cmt + bank + idx,
-                                 z->v->cmtc + bank + idx, (val >> k) & 1);
+                                 z->v->cmtc + bank + idx, val >> k & 1);
     prev = idx - (1U << n);
     if (!z->enc) bput(z, n, prev);
   }

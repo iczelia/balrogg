@@ -103,12 +103,12 @@ static INLINE u32 cm_hpre(u32 a, u32 b, u32 c, u32 d) {
 }
 
 static INLINE u32 cm_hpx(u32 a, u32 b, u32 c, u32 d) {
-  return (a >> 2) ^ (b >> 3) ^ (c >> 4) ^ (d >> 5);
+  return a >> 2 ^ b >> 3 ^ c >> 4 ^ d >> 5;
 }
 
 static INLINE u32 cm_hst(u32 base, u32 xr, u32 e) {
   u32 h = base + e * 110002499u;
-  return h ^ (h >> 9) ^ xr ^ (e >> 6);
+  return h ^ h >> 9 ^ xr ^ e >> 6;
 }
 
 #endif

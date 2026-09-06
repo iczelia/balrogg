@@ -40,7 +40,7 @@ void rc_dec_file(rc_dec * d, blr_file * f, sz off, sz len) {
   memset(d, 0, sizeof *d);
   d->file = f;  d->off = off;  d->len = len;  d->range = 0xFFFFFFFFUL;
   d->window = xmalloc(MIN(len, BLR_IO_CHUNK));
-  Fi(MIN(len, 4), d->code = (d->code << 8) | rc_get(d));
+  Fi(MIN(len, 4), d->code = d->code << 8 | rc_get(d));
   if (len && len < 4) d->code <<= 8 * (4 - len);
 }
 
@@ -71,7 +71,7 @@ void rc_enc_free(rc_enc * e) {
 /*  Flush enough bytes for the decoder seed to fall inside the final range.  */
 sz rc_enc_finish(rc_enc * e) {
   if (e->range > 0x2000000UL) { e->range = 0x800000UL;  rc_addlow(e, 0x1000000UL); }
-  else                        { e->range = 0x8000UL;    rc_addlow(e, 0x800000UL); }
+  else                        { e->range = 0x8000UL;  rc_addlow(e, 0x800000UL); }
   do { rc_shift(e);  e->range <<= 8; } while (e->range < RC_TOP);
   /*  Release the cached byte now that no carry can arrive.  */
   rc_put(e, e->cache);

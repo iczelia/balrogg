@@ -69,15 +69,13 @@ static void t_verbs(void) {
   const char * arc2 = xt_tmp("cli2.blr"), * bad = xt_tmp("bad.opus");
   const char * out = xt_tmp("cli.out");
   xt_section_begin("cli verbs");
-  {
-    sz n;
+  { sz n;
     u8 * original = slurp(fx, &n);
     spew(out, original, n);
     sprintf(args, "e \"%s\" \"%s\"", out, out);
     CHECK(xt_run(args, log) == BLR_EXIT_IO && xt_same_file(fx, out),
           "input cannot be overwritten through the output path");
-    free(original);
-  }
+    free(original); }
   sprintf(args, "-3 e \"%s\" \"%s\"", fx, arc);
   CHECK(xt_run(args, log) == 0, "e on a Vorbis file");
   sprintf(args, "d \"%s\" \"%s\"", arc, out);
@@ -112,8 +110,7 @@ static void t_verbs(void) {
     sprintf(args, "dump \"%s\"", arc);
     CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "Opus mode"),
           "dump names the Opus mode");
-    {
-      ogg_page p;
+    { ogg_page p;
       sz n, pg;
       u8 * b = slurp(fx, &n);
       pg = ogg_parse(&p, b, n);
@@ -126,8 +123,7 @@ static void t_verbs(void) {
               && xt_file_contains(log, "unsupported Ogg version"),
               "Opus input with a nonzero Ogg version is refused");
       } else CHECK(0, "cannot parse the Opus fixture");
-      free(b);
-    }
+      free(b); }
   }
   xt_unlink(log);  xt_unlink(arc);  xt_unlink(arc2);  xt_unlink(bad);
   xt_unlink(out);
@@ -194,11 +190,11 @@ static void t_packet_edges(void) {
   const char * input = xt_tmp("edges.ogg"), * arc = xt_tmp("edges.blr");
   const char * out = xt_tmp("edges.out"), * log = xt_tmp("edges.log");
   char args[8192];
-  int variant, lev;
+  int i, lev;
   xt_section_begin("Vorbis packet boundaries");
-  for (variant = 0; variant < 7; variant++) {
+  Fi(7,
     sz len, at = 0, got = 0, off = 0, oldlen = 0, newlen, bodylen, pglen;
-    u8 * b = slurp(xt_fixture(xt_data, variant == 6 ? "silence.ogg"
+    u8 * b = slurp(xt_fixture(xt_data, i == 6 ? "silence.ogg"
                                                    : "noise_pink.ogg"), &len);
     u8 * body, * image;
     const u8 * src;
@@ -209,26 +205,25 @@ static void t_packet_edges(void) {
       if (!got) break;
       src = b + at + OGG_HDRMIN + p.nseg;
       off = 0;
-      for (j = 0; j < p.np; j++) {
+      Fj(p.np,
         if (!p.tail && !(p.type & 1) && j > 0 && j + 1 < p.np &&
-            p.plen[j] >= (variant == 6 ? 1U : 16U) && !(src[off] & 1)) {
+            p.plen[j] >= (i == 6 ? 1U : 16U) && !(src[off] & 1)) {
           oldlen = p.plen[j];  found = 1;  break;
         }
-        off += p.plen[j];
-      }
+        off += p.plen[j]);
       if (!found) at += got;
     }
-    CHECK(found, "packet boundary fixture %d has a suitable packet", variant);
+    CHECK(found, "packet boundary fixture %d has a suitable packet", i);
     if (!found) { free(b);  continue; }
-    newlen = variant == 0 ? 1 : variant == 1 ? 2 : variant == 2 ? oldlen / 2
-               : variant == 3 ? oldlen - 1 : variant == 6 ? oldlen : oldlen + 3;
+    newlen = i == 0 ? 1 : i == 1 ? 2 : i == 2 ? oldlen / 2
+               : i == 3 ? oldlen - 1 : i == 6 ? oldlen : oldlen + 3;
     src = b + at + OGG_HDRMIN + p.nseg;
     bodylen = p.blen - oldlen + newlen;
     body = xcalloc(bodylen, 1);
     memcpy(body, src, off);
     memcpy(body + off, src + off, MIN(oldlen, newlen));
-    if (variant == 5) memset(body + off + oldlen, 0xA5, 3);
-    if (variant == 6) body[off + newlen - 1] |= 0x80;
+    if (i == 5) memset(body + off + oldlen, 0xA5, 3);
+    if (i == 6) body[off + newlen - 1] |= 0x80;
     memcpy(body + off + newlen, src + off + oldlen, p.blen - off - oldlen);
     p.plen[j] = (u32) newlen;
     ogg_pack(&p);
@@ -242,17 +237,16 @@ static void t_packet_edges(void) {
       int ok;
       sprintf(args, "-%d e \"%s\" \"%s\"", lev, input, arc);
       ok = xt_run(args, log) == 0;
-      CHECK(ok, "packet variant %d encodes at -%d", variant, lev);
+      CHECK(ok, "packet variant %d encodes at -%d", i, lev);
       if (!ok) continue;
       sprintf(args, "d \"%s\" \"%s\"", arc, out);
       CHECK(xt_run(args, log) == 0 && xt_same_file(input, out),
-            "packet variant %d is lossless at -%d", variant, lev);
+            "packet variant %d is lossless at -%d", i, lev);
       { sz n;  u8 * a = slurp(arc, &n);
         CHECK(n >= ARC_HDRLEN && a[ARC_MAGLEN] == ARC_VER,
-              "packet variant %d declares the current archive version", variant);
+              "packet variant %d declares the current archive version", i);
         free(a); }
-    }
-  }
+    });
   xt_unlink(input);  xt_unlink(arc);  xt_unlink(out);  xt_unlink(log);
 }
 
@@ -301,27 +295,25 @@ static void t_archive_version(void) {
   const char * out = xt_tmp("cli.out"), * log = xt_tmp("cli.log");
   char args[8192];
   static const int versions[] = { ARC_VER - 1, ARC_VER + 1, 255 };
-  int codec, v, j;
+  int i, v, j;
   xt_section_begin("archive version gate");
-  for (codec = 0; codec <= has_opus; codec++) {
-    const char * input = xt_fixture(xt_data, codec ? "silk_speech_12k.opus" : "tiny.ogg");
-    sz n; u8 * data;
+  Fi(has_opus + 1,
+    const char * input = xt_fixture(xt_data, i ? "silk_speech_12k.opus" : "tiny.ogg");
+    sz n;  u8 * data;
     sprintf(args, "-1 e \"%s\" \"%s\"", input, arc);
-    CHECK(xt_run(args, log) == 0, "codec %d writes current format", codec);
+    CHECK(xt_run(args, log) == 0, "codec %d writes current format", i);
     data = slurp(arc, &n);
     CHECK(n >= ARC_HDRLEN && data[ARC_MAGLEN] == ARC_VER,
-          "codec %d uses the shared version knob", codec);
-    for (j = 0; j < (int) (sizeof versions / sizeof *versions); j++) {
+          "codec %d uses the shared version knob", i);
+    Fj((int) (sizeof versions / sizeof *versions),
       v = versions[j];
-      data[ARC_MAGLEN] = (u8) v; spew(bad, data, n);
+      data[ARC_MAGLEN] = (u8) v;  spew(bad, data, n);
       sprintf(args, "d \"%s\" \"%s\"", bad, out);
       CHECK(xt_run(args, log) == BLR_EXIT_REFUSED &&
             xt_file_contains(log, "unsupported archive version"),
-            "codec %d rejects version %d", codec, v);
-    }
-    free(data);
-  }
-  xt_unlink(arc); xt_unlink(bad); xt_unlink(out); xt_unlink(log);
+            "codec %d rejects version %d", i, v));
+    free(data));
+  xt_unlink(arc);  xt_unlink(bad);  xt_unlink(out);  xt_unlink(log);
 }
 
 static void t_regress(void) {
@@ -455,6 +447,7 @@ static void t_constructed(void) {
   const char * fx = xt_fixture(xt_data, "lowbr.ogg");
   const char * log = xt_tmp("cli.log"), * in = xt_tmp("con.ogg");
   const char * arc = xt_tmp("con.blr"), * out = xt_tmp("con.out");
+  int i;
   ogg_page p;
   sz n, at, got, last = 0;
   u8 * b;
@@ -492,46 +485,42 @@ static void t_constructed(void) {
 
   /*  A padded audio packet spans a full page, followed by a zero- or one-byte
       closing fragment and ordinary audio. Exercise both continuation forms.  */
-  {
-    int extra;
-    for (extra = 0; extra <= 1; extra++) {
-      int inserted = 0;
-      u8 * pad = xcalloc(OGG_MAXSEG * OGG_MAXSEG, 1);
-      u8 * body = xmalloc(OGG_MAXSEG * OGG_MAXSEG);
-      o.b = NULL;  o.n = o.cap = 0;
-      for (at = 0; at < n; at += got) {
-        const u8 * src;
-        got = ogg_parse(&p, b + at, n - at);
-        if (!got) break;
-        src = b + at + OGG_HDRMIN + p.nseg;
-        if (!inserted && p.np && !(src[0] & 1)) {
-          ogg_page first = p;
-          int j;
-          memcpy(pad, src, p.plen[0]);
-          first.type = 0;  first.glo = first.ghi = (u32) -1;
-          first.np = 1;  first.plen[0] = OGG_MAXSEG * OGG_MAXSEG;
-          first.tail = 1;
-          ob_page(&o, &first, pad);
-          for (j = p.np; j > 0; j--) p.plen[j] = p.plen[j - 1];
-          p.plen[0] = (u32) extra;  p.np++;  p.type |= 1;
-          body[0] = 0;
-          memcpy(body + extra, src, p.blen);
-          src = body;
-          inserted = 1;
-        }
-        if (inserted) p.seq++;
-        ob_page(&o, &p, src);
+  Fi(2,
+    int inserted = 0;
+    u8 * pad = xcalloc(OGG_MAXSEG * OGG_MAXSEG, 1);
+    u8 * body = xmalloc(OGG_MAXSEG * OGG_MAXSEG);
+    o.b = NULL;  o.n = o.cap = 0;
+    for (at = 0; at < n; at += got) {
+      const u8 * src;
+      got = ogg_parse(&p, b + at, n - at);
+      if (!got) break;
+      src = b + at + OGG_HDRMIN + p.nseg;
+      if (!inserted && p.np && !(src[0] & 1)) {
+        ogg_page first = p;
+        int j;
+        memcpy(pad, src, p.plen[0]);
+        first.type = 0;  first.glo = first.ghi = (u32) -1;
+        first.np = 1;  first.plen[0] = OGG_MAXSEG * OGG_MAXSEG;
+        first.tail = 1;
+        ob_page(&o, &first, pad);
+        for (j = p.np; j > 0; j--) p.plen[j] = p.plen[j - 1];
+        p.plen[0] = (u32) i;  p.np++;  p.type |= 1;
+        body[0] = 0;
+        memcpy(body + i, src, p.blen);
+        src = body;
+        inserted = 1;
       }
-      spew(in, o.b, o.n);
-      sprintf(args, "-5 e \"%s\" \"%s\"", in, arc);
-      CHECK(inserted && xt_run(args, log) == 0,
-            "padded continuation with %d-byte closure encodes", extra);
-      sprintf(args, "d \"%s\" \"%s\"", arc, out);
-      CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
-            "padded continuation with %d-byte closure is lossless", extra);
-      free(o.b);  free(body);  free(pad);
+      if (inserted) p.seq++;
+      ob_page(&o, &p, src);
     }
-  }
+    spew(in, o.b, o.n);
+    sprintf(args, "-5 e \"%s\" \"%s\"", in, arc);
+    CHECK(inserted && xt_run(args, log) == 0,
+          "padded continuation with %d-byte closure encodes", i);
+    sprintf(args, "d \"%s\" \"%s\"", arc, out);
+    CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
+          "padded continuation with %d-byte closure is lossless", i);
+    free(o.b);  free(body);  free(pad));
   free(b);
   xt_unlink(log);  xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
 }
@@ -559,18 +548,17 @@ static void t_codec_choices(void) {
           CHECK(p.plen[0] == sizeof packet, "three-byte floor fixture");
           memcpy(packet, src, sizeof packet);
           if (variant < 0) packet[2] &= (u8) ~12; /* canonical master symbol */
-          for (i = 0; i < 200; i++) memcpy(body + 3 * i, packet, 3);
+          Fi(200, memcpy(body + 3 * i, packet, 3));
           p.np = 200;
-          for (i = 0; i < p.np; i++) p.plen[i] = 3;
-          for (j = 0; j < 100; j++) {
-            p.seq = (u32) j + 2; p.type = j == 99 ? 4 : 0;
-            p.glo = (u32) (j + 1) * 6400 - 32; p.ghi = 0;
-            ob_page(&o, &p, body);
-          }
+          Fi(p.np, p.plen[i] = 3);
+          Fj(100,
+            p.seq = (u32) j + 2;  p.type = j == 99 ? 4 : 0;
+            p.glo = (u32) (j + 1) * 6400 - 32;  p.ghi = 0;
+            ob_page(&o, &p, body));
         } else ob_page(&o, &p, src);
-        at += got; if (at == n) break;
+        at += got;  if (at == n) break;
       }
-      spew(input, o.b, o.n); free(o.b); free(b);
+      spew(input, o.b, o.n);  free(o.b);  free(b);
     } else {
       sz len, at = 0, got;
       u8 * b = slurp(xt_fixture(xt_data, "celt_st_128k.opus"), &len);
@@ -584,8 +572,8 @@ static void t_codec_choices(void) {
         if (variant < 5 && p.seq == 1) {
           sz n = variant == 2 ? 4095 : variant == 3 ? 4096 : 7062;
           CHECK(p.np == 1 && p.blen < n, "OpusTags fixture fits padding");
-          memcpy(body, src, p.blen); memset(body + p.blen, 0, n - p.blen);
-          p.plen[0] = (u32) n; src = body; changed = 1;
+          memcpy(body, src, p.blen);  memset(body + p.blen, 0, n - p.blen);
+          p.plen[0] = (u32) n;  src = body;  changed = 1;
         } else if (variant >= 5 && p.seq == 2) {
           sz old = p.plen[0], n, extra, nhdr = 2, i;
           /* One frame, followed by RFC 6716 code-3 padding. Each 255 in
@@ -593,29 +581,29 @@ static void t_codec_choices(void) {
           CHECK(p.np > 1 && (src[0] & 3) == 0, "single-frame Opus fixture");
           n = variant == 8 ? 61440 : old + 2 + (sz) (variant + 6) * 255;
           extra = n - old - 2;
-          pad[0] = src[0] | 3; pad[1] = 0x41;
-          for (i = 0; i < extra / 255; i++) pad[nhdr++] = 255;
+          pad[0] = src[0] | 3;  pad[1] = 0x41;
+          Fi(extra / 255, pad[nhdr++] = 255);
           pad[nhdr++] = (u8) (extra % 255);
           memcpy(pad + nhdr, src + 1, old - 1);
           memset(pad + nhdr + old - 1, 0, n - nhdr - old + 1);
           if (variant == 8) {
             ogg_page first = p;
-            first.type = 0; first.np = 1; first.plen[0] = (u32) n;
-            first.tail = 0; first.glo = 960; first.ghi = 0; first.seq = seq++;
+            first.type = 0;  first.np = 1;  first.plen[0] = (u32) n;
+            first.tail = 0;  first.glo = 960;  first.ghi = 0;  first.seq = seq++;
             ob_page(&o, &first, pad);
             for (i = 1; i < (sz) p.np; i++) p.plen[i - 1] = p.plen[i];
-            p.np--; src += old;
+            p.np--;  src += old;
           } else {
-            memcpy(body, pad, n); memcpy(body + n, src + old, p.blen - old);
-            p.plen[0] = (u32) n; src = body;
+            memcpy(body, pad, n);  memcpy(body + n, src + old, p.blen - old);
+            p.plen[0] = (u32) n;  src = body;
           }
           changed = 1;
         }
-        p.seq = seq++; ob_page(&o, &p, src); at += got;
+        p.seq = seq++;  ob_page(&o, &p, src);  at += got;
         if (at == len) break;
       }
       CHECK(changed && at == len, "Opus variant %d constructed", variant);
-      spew(input, o.b, o.n); free(o.b); free(body); free(pad); free(b);
+      spew(input, o.b, o.n);  free(o.b);  free(body);  free(pad);  free(b);
     }
     for (lev = 1; lev <= 9; lev += 8) {
       int ok;
@@ -637,7 +625,7 @@ static void t_codec_choices(void) {
             "valid codec variant %d is lossless at -%d", variant, lev);
     }
   }
-  xt_unlink(input); xt_unlink(arc); xt_unlink(out); xt_unlink(log);
+  xt_unlink(input);  xt_unlink(arc);  xt_unlink(out);  xt_unlink(log);
 }
 
 void xt_run_cli(void) {

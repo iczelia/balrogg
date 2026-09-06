@@ -118,7 +118,7 @@ static INLINE u8 rc_get(rc_dec * d) {
 
 static INLINE void rc_dec_norm(rc_dec * d) {
   while (d->range < RC_TOP) {
-    d->code = (d->code << 8) | rc_get(d);
+    d->code = d->code << 8 | rc_get(d);
     d->range <<= 8;
   }
 }
@@ -173,8 +173,8 @@ static INLINE int rc_dec_bit(rc_dec * d, u16 * p) {
 
 static INLINE u16 rc_adapt(u16 v, u8 * c, int lim, int bit) {
   u32 d = rc_divt[*c];
-  i32 nv = bit ? (i32) v - (i32) (((u32) v * d) >> 16)
-               : (i32) v + (i32) (((u32) (0xFFFF - v) * d) >> 16);
+  i32 nv = bit ? (i32) v - (i32) ((u32) v * d >> 16)
+               : (i32) v + (i32) ((u32) (0xFFFF - v) * d >> 16);
   if (nv < 1) nv = 1;
   if (nv > 0xFFFE) nv = 0xFFFE;
   if ((int) *c < lim) (*c)++;

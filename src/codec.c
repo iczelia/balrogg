@@ -57,7 +57,7 @@ static u32 pkt_samples(const vb_ctx * v, const u8 * pk) {
   if (pk[0] & 1) return 0;
   FATAL_UNLESS(v->cur != NULL, "vorbis: audio before setup");
   d = (int) blr_ilog(v->cur->nmd - 1);
-  Fj((sz) d, md |= (u32) ((pk[(1 + j) >> 3] >> ((1 + j) & 7)) & 1) << j);
+  Fj((sz) d, md |= (u32) (pk[(1 + j) >> 3] >> ((1 + j) & 7) & 1) << j);
   FATAL_UNLESS(md < v->cur->nmd, "vorbis: mode %lu of %lu",
                (unsigned long) md, (unsigned long) v->cur->nmd);
   return (v->cur->blockflag[md] ? v->i.bs1 : v->i.bs0) / 2;
@@ -66,7 +66,7 @@ static u32 pkt_samples(const vb_ctx * v, const u8 * pk) {
 /*  Count samples at packet boundaries.  */
 static u32 samples(const vb_ctx * v, const ogg_page * p, const u8 * body,
                    u32 * carry) {
-  int i, frag = p->np > 0 && (p->type & 1);
+  int i, frag = p->np > 0 && p->type & 1;
   sz at = 0;
   u32 s = 0, tl = 0;
   Fi(p->np,
@@ -86,7 +86,7 @@ static u32 samples(const vb_ctx * v, const ogg_page * p, const u8 * body,
 static int allhdr(const ogg_page * p, const u8 * body) {
   int i;
   sz at = 0;
-  if (p->np == 0 || p->tail || (p->type & 1)) return 0;
+  if (p->np == 0 || p->tail || p->type & 1) return 0;
   Fi(p->np,
     if (!p->plen[i] || !(body[at] & 1)) return 0;
     at += p->plen[i]);
@@ -107,7 +107,7 @@ static sz join_len(const pg_t * pg, int i, int z, sz pl) {
   sz total = pl;
   int k;
   for (k = i + 1; k <= z; k++) {
-    FATAL_UNLESS(pg[k].np > 0 && (pg[k].type & 1),
+    FATAL_UNLESS(pg[k].np > 0 && pg[k].type & 1,
                  "page %d continuation is missing", i);
     total += pg[k].first;
     if (!(pg[k].np == 1 && pg[k].tail)) return total;
@@ -230,7 +230,7 @@ static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
       at += pl;
       /*  Skip fragments already coded where their packet started. `cont`
           also covers a zero-length closing fragment.  */
-      if (j == 0 && (p.type & 1) && cont) {
+      if (j == 0 && p.type & 1 && cont) {
         FATAL_UNLESS(pl <= spill, "page %d takes %lu of %lu remaining bytes",
                      i, (unsigned long) pl, (unsigned long) spill);
         spill -= pl;
@@ -285,8 +285,8 @@ static archive pack_once(blr_file * input, const char * in,
   rc_enc e0;
   u16 cp[C_NPROB];
   archive a;
-  sz at = 0, got, i;
-  int np = 0, cap = 64, nl = 0, lcap = 8, l, m, eos = 1, prev = 0, nset = 0;
+  sz at = 0, got;
+  int np = 0, cap = 64, nl = 0, lcap = 8, i, j, k, eos = 1, prev = 0, nset = 0;
   int nrec = 0, nkeep = 0, * recl, * keepl;
 
   pg = xmalloc((sz) cap * sizeof *pg);
@@ -312,49 +312,45 @@ static archive pack_once(blr_file * input, const char * in,
 
   /*  BOS starts a link only after EOS.  */
   lk = xmalloc((sz) lcap * sizeof *lk);
-  Fi((sz) np,
-    if ((pg[i].type & 2) && eos) {
+  Fk(np,
+    if (pg[k].type & 2 && eos) {
       if (nl == lcap) { lcap *= 2;  lk = xrealloc(lk, (sz) lcap * sizeof *lk); }
-      lk[nl].a = lk[nl].z = (int) i;  lk[nl].serial = pg[i].serial;
+      lk[nl].a = lk[nl].z = (int) k;  lk[nl].serial = pg[k].serial;
       lk[nl].rep = lk[nl].hdup = -1;  lk[nl].rec = lk[nl].keep = 0;
       lk[nl].setup = -1;  nl++;  eos = 0;
     }
     FATAL_UNLESS(nl > 0, "%s: page %lu precedes any bitstream", in,
-                 (unsigned long) i);
+                 (unsigned long) k);
     /*  Pages after EOS must open another link.  */
     FATAL_UNLESS(!eos, "%s: page %lu follows end of stream", in,
-                 (unsigned long) i);
-    lk[nl - 1].z = (int) i;
-    if (pg[i].type & 4) eos = 1);
+                 (unsigned long) k);
+    lk[nl - 1].z = (int) k;
+    if (pg[k].type & 4) eos = 1);
 
   /*  Find whole-link and header-page repeats in one pass.  */
-  for (l = 0; l < nl; l++) {
+  Fi(nl,
     sz xo, xn, yo, yn;
-    runof(pg, lk + l, &xo, &xn);
+    runof(pg, lk + i, &xo, &xn);
     if (!o->dd)
-      for (m = 0; m < l; m++) {
-        if (lk[m].rep >= 0) continue;
-        runof(pg, lk + m, &yo, &yn);
+      Fj(i,
+        if (lk[j].rep >= 0) continue;
+        runof(pg, lk + j, &yo, &yn);
         if (xn == yn && samerun(input, xo, yo, xn)) {
-          lk[l].rep = m;  lk[m].rec = 1;  break;
-        }
-      }
-    if (lk[l].rep >= 0) continue;
-    if (!o->df && hdrrun(pg, lk + l, &xo, &xn) > 0)
-      for (m = 0; m < l; m++) {
-        if (lk[m].rep >= 0 || lk[m].hdup >= 0) continue;
-        if (hdrrun(pg, lk + m, &yo, &yn) > 0 && xn == yn &&
+          lk[i].rep = j;  lk[j].rec = 1;  break;
+        });
+    if (lk[i].rep >= 0) continue;
+    if (!o->df && hdrrun(pg, lk + i, &xo, &xn) > 0)
+      Fj(i,
+        if (lk[j].rep >= 0 || lk[j].hdup >= 0) continue;
+        if (hdrrun(pg, lk + j, &yo, &yn) > 0 && xn == yn &&
             samerun(input, xo, yo, xn)) {
-          lk[l].hdup = m;  lk[m].keep = 1;  break;
-        }
-      }
-    if (lk[l].hdup >= 0) {
-      int k;
-      lk[l].setup = lk[lk[l].hdup].setup;
-      for (k = lk[l].a + 1; k <= lk[l].z && isheader(pg + k); k++)
+          lk[i].hdup = j;  lk[j].keep = 1;  break;
+        });
+    if (lk[i].hdup >= 0) {
+      lk[i].setup = lk[lk[i].hdup].setup;
+      for (k = lk[i].a + 1; k <= lk[i].z && isheader(pg + k); k++)
         pg[k].skip = 1;
-    } else lk[l].setup = nset++;
-  }
+    } else lk[i].setup = nset++);
 
   arc_init(&a, o->flags);
   /*  Omit the tune blob when all values are default.  */
@@ -373,36 +369,34 @@ static archive pack_once(blr_file * input, const char * in,
   recl = xmalloc((sz) nl * sizeof *recl);
   keepl = xmalloc((sz) nl * sizeof *keepl);
 
-  for (l = 0; l < nl; l++) {
+  Fi(nl,
     rc_enc_bit(&e0, cp + C_CONT + prev, 1);
     prev = 1;
-    if (lk[l].rep >= 0) {
-      for (m = 0; m < nrec && recl[m] != lk[l].rep; m++) ;
-      if (m >= nrec)
-        FATAL_CODE(BLR_EXIT_INTERNAL, "internal: link %d replays an unrecorded run", l);
+    if (lk[i].rep >= 0) {
+      Fj(nrec, if (recl[j] == lk[i].rep) break);
+      if (j >= nrec)
+        FATAL_CODE(BLR_EXIT_INTERNAL, "internal: link %d replays an unrecorded run", i);
       rc_enc_bit(&e0, cp + C_SEL, 1);
-      mdl_enc(&lrep, &e0, (u32) (nrec - 1 - m));
-      mdl_enc(h.f + 3, &e0, lk[l].serial);
+      mdl_enc(&lrep, &e0, (u32) (nrec - 1 - j));
+      mdl_enc(h.f + 3, &e0, lk[i].serial);
       continue;
     }
     rc_enc_bit(&e0, cp + C_SEL, 0);
-    rc_enc_bit(&e0, cp + C_REC, lk[l].rec);
-    rc_enc_bit(&e0, cp + C_DUP, lk[l].hdup >= 0);
-    if (lk[l].hdup >= 0) {
-      for (m = 0; m < nkeep && keepl[m] != lk[l].hdup; m++) ;
-      if (m >= nkeep)
-        FATAL_CODE(BLR_EXIT_INTERNAL, "internal: link %d replays an unkept header", l);
-      mdl_enc(&hrep, &e0, (u32) (nkeep - 1 - m));
-    } else rc_enc_bit(&e0, cp + C_KEEP, lk[l].keep);
+    rc_enc_bit(&e0, cp + C_REC, lk[i].rec);
+    rc_enc_bit(&e0, cp + C_DUP, lk[i].hdup >= 0);
+    if (lk[i].hdup >= 0) {
+      Fj(nkeep, if (keepl[j] == lk[i].hdup) break);
+      if (j >= nkeep)
+        FATAL_CODE(BLR_EXIT_INTERNAL, "internal: link %d replays an unkept header", i);
+      mdl_enc(&hrep, &e0, (u32) (nkeep - 1 - j));
+    } else rc_enc_bit(&e0, cp + C_KEEP, lk[i].keep);
     { u32 pages = 0;
-      int k;
-      for (k = lk[l].a; k <= lk[l].z; k++) if (!pg[k].skip) pages++;
+      for (k = lk[i].a; k <= lk[i].z; k++) if (!pg[k].skip) pages++;
       for (k = 31; k >= 0; k--)
-        rc_enc_bit_raw(&e0, 0x8000, (int) ((pages >> k) & 1)); }
-    enc_link(&v, &h, &a, pg, lk + l, ARC_SOLID(o->flags) || l == 0, input);
-    if (lk[l].rec) recl[nrec++] = l;
-    if (lk[l].keep) keepl[nkeep++] = l;
-  }
+        rc_enc_bit_raw(&e0, 0x8000, (int) (pages >> k & 1)); }
+    enc_link(&v, &h, &a, pg, lk + i, ARC_SOLID(o->flags) || i == 0, input);
+    if (lk[i].rec) recl[nrec++] = i;
+    if (lk[i].keep) keepl[nkeep++] = i);
   rc_enc_bit(&e0, cp + C_CONT + prev, 0);
 
   rc_enc_finish(&e0);
@@ -506,7 +500,7 @@ void vb_unpack(const char * in, const char * out) {
   arc_read(&a, input);
   blr_progress_begin(in, "decoding", len);
   FATAL_UNLESS(!(a.flags & ARC_OPUS), "%s: not a Vorbis archive", in);
-  FATAL_UNLESS(a.n >= 1 && (a.n % 3) == 1,
+  FATAL_UNLESS(a.n >= 1 && a.n % 3 == 1,
                "%s: %lu streams, expected 1 + 3k", in, (unsigned long) a.n);
   rc_dec_file(&d0, a.s[0].file, a.s[0].off, a.s[0].len);
   rc_probs_init(cp, C_NPROB);
@@ -525,7 +519,7 @@ void vb_unpack(const char * in, const char * out) {
     ogg_page q;
     sz mark, hoff = 0, hlen = 0, jn = 0, spill = 0;
     u32 carry = 0;
-    int isrec, isdup, iskeep = 0, w = 0, first = 1, done = 0, cur, r, cont = 0;
+    int isrec, isdup, iskeep = 0, w = 0, first = 1, done = 0, cur, r, k, cont = 0;
     int hpk = 0;                  /*  header packets the replayed pages hold  */
     u32 ser = 0, pages = 0;
 
@@ -553,11 +547,8 @@ void vb_unpack(const char * in, const char * out) {
       cur = keep[cur].setup;
     } else { iskeep = rc_dec_bit(&d0, cp + C_KEEP);  cur = nset++; }
 
-    {
-      int k;
-      Fk(32, pages = (pages << 1) | (u32) rc_dec_bit_raw(&d0, 0x8000));
-      FATAL_UNLESS(pages, "%s: a link has no coded pages", in);
-    }
+    Fk(32, pages = pages << 1 | (u32) rc_dec_bit_raw(&d0, 0x8000));
+    FATAL_UNLESS(pages, "%s: a link has no coded pages", in);
     FATAL_UNLESS(si + 2 < a.n, "%s: incomplete stream chain", in);
     rc_dec_file(&dt, a.s[si].file, a.s[si].off, a.s[si].len);
     rc_dec_file(&dm, a.s[si + 1].file, a.s[si + 1].off, a.s[si + 1].len);
@@ -582,7 +573,7 @@ void vb_unpack(const char * in, const char * out) {
       Fj(q.np,
         sz pl = q.plen[j];
         /*  Copy a fragment from the packet decoded on an earlier page.  */
-        if (j == 0 && (q.type & 1) && cont) {
+        if (j == 0 && q.type & 1 && cont) {
           FATAL_UNLESS(pl <= spill, "%s: page takes %lu of %lu remaining bytes",
                        in, (unsigned long) pl, (unsigned long) spill);
           if (pl) memcpy(body + at, jb + jn - spill, pl);
@@ -625,13 +616,13 @@ void vb_unpack(const char * in, const char * out) {
       done = !--pages;
       FATAL_UNLESS(!(q.type & 4) || done,
                    "%s: page count extends past end of stream", in);
-      FATAL_UNLESS(!done || (q.type & 4) || si == a.n,
+      FATAL_UNLESS(!done || q.type & 4 || si == a.n,
                    "%s: a non-final link has no end-of-stream page", in);
     }
     FATAL_UNLESS(!cont, "%s: link ends in a continued packet", in);
     vb_endlink(&v);
     progress_base += dt.len + dm.len + db.len;
-    bf_dropcache(dt.file); bf_dropcache(dm.file); bf_dropcache(db.file);
+    bf_dropcache(dt.file);  bf_dropcache(dm.file);  bf_dropcache(db.file);
     rc_dec_free(&dt);  rc_dec_free(&dm);  rc_dec_free(&db);
 
     if (isrec) {

@@ -22,13 +22,13 @@ static void crcinit(void) {
   if (CRC[1]) return;
   Fi(256,
     c = i << 24;
-    Fj(8, c = (c & 0x80000000UL) ? (c << 1) ^ 0x04C11DB7UL : c << 1);
+    Fj(8, c = c & 0x80000000UL ? c << 1 ^ 0x04C11DB7UL : c << 1);
     CRC[i] = c);
 }
 
 static u32 crcrun(u32 c, const u8 * d, sz n) {
   sz i;
-  Fi(n, c = (c << 8) ^ CRC[((c >> 24) ^ d[i]) & 0xFF]);
+  Fi(n, c = c << 8 ^ CRC[(c >> 24 ^ d[i]) & 0xFF]);
   return c;
 }
 
@@ -58,7 +58,7 @@ void ogg_crc_set(u8 * p, sz n) {
 }
 
 static u32 rd32(const u8 * b) {
-  return (u32) b[0] | ((u32) b[1] << 8) | ((u32) b[2] << 16) | ((u32) b[3] << 24);
+  return (u32) b[0] | (u32) b[1] << 8 | (u32) b[2] << 16 | (u32) b[3] << 24;
 }
 
 int ogg_crc_ok(const u8 * p, sz n) {

@@ -115,7 +115,7 @@ void bf_resize(blr_file * f, sz len) {
 }
 
 void bf_dropcache(blr_file * f) {
-  bf_flush(f); free(f->buf); f->buf = NULL; f->live = 0;
+  bf_flush(f);  free(f->buf);  f->buf = NULL;  f->live = 0;
 }
 
 /* Overlapping moves use one reusable window and the safe copy direction. */
@@ -139,8 +139,8 @@ void bf_flush(blr_file * f) {
     sz at = f->parent->len;
     FATAL_UNLESS(f->stream && f->at / BLR_IO_CHUNK == f->next,
                  "chunk stream is not append-only");
-    Fi(4, h[i] = (u8) (f->stream >> (8 * i));
-          h[i + 4] = (u8) (f->used >> (8 * i)));
+    Fi(4, h[i] = (u8) (f->stream >> 8 * i);
+          h[i + 4] = (u8) (f->used >> 8 * i));
     bf_write(f->parent, at, h, sizeof h);
     bf_write(f->parent, at + sizeof h, f->buf, f->used);
     /* Length already includes the live window. */
@@ -195,7 +195,7 @@ void bf_read(blr_file * f, sz at, void * out, sz n) {
       sz idx = at / BLR_IO_CHUNK, off = at % BLR_IO_CHUNK;
       sz take = MIN(n, f->ext[idx].len - off);
       bf_read(f->parent, f->ext[idx].off + off, p, take);
-      at += take; p += take; n -= take;
+      at += take;  p += take;  n -= take;
     }
     return;
   }
@@ -248,8 +248,8 @@ void bf_close(blr_file * f) {
 void bf_readmeta(blr_file * f, sz at, void * out, sz n) {
   FATAL_UNLESS(at <= f->len && n <= f->len - at && n <= BLR_IO_CHUNK,
                "invalid metadata read");
-  if (f->parent || f->memory) { bf_read(f, at, out, n); return; }
-  bf_flush(f); seek_file(f, at);
+  if (f->parent || f->memory) { bf_read(f, at, out, n);  return; }
+  bf_flush(f);  seek_file(f, at);
 #ifdef BLR_WIN32
   { DWORD got;
     if (!ReadFile(f->handle, out, (DWORD) n, &got, NULL) || got != n)

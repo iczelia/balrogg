@@ -100,8 +100,8 @@ static void dump(const char * path) {
     vb_tune_get(&t, a.tune, a.ntune);
     printf("  tune: adapt cap %u, CM rate %u, flags 0x%02x%s%s\n",
            t.alim, t.lr, t.flags,
-           (t.flags & VB_TF_CLS) ? " (class from the previous packet)" : "",
-           (t.flags & VB_TF_MATCH) ? " (match model)" : "");
+           t.flags & VB_TF_CLS ? " (class from the previous packet)" : "",
+           t.flags & VB_TF_MATCH ? " (match model)" : "");
   }
   Fi(a.n, printf("  stream %lu: %lu bytes\n",
                  (unsigned long) i, (unsigned long) a.s[i].len));
@@ -166,7 +166,7 @@ static int arc_is_opus(const char * path) {
   u8 b[ARC_HDRLEN];
   int n = peek(path, b, (int) sizeof b);
   return n >= (int) ARC_HDRLEN && !memcmp(b, ARC_MAGIC, ARC_MAGLEN)
-         && b[ARC_MAGLEN] <= ARC_VER && (b[ARC_MAGLEN + 1] & ARC_OPUS);
+         && b[ARC_MAGLEN] <= ARC_VER && b[ARC_MAGLEN + 1] & ARC_OPUS;
 }
 
 /*  File identity and size without the C runtime's stat(), which the
@@ -439,7 +439,7 @@ static void pool_spawn(pool * p, const char * in, const char * out,
 static void pool_reap(pool * p) {
   int st;
   pid_t child;
-  do child = waitpid(-1, &st, 0); while (child < 0 && errno == EINTR);
+  do child = waitpid(-1, &st, 0);  while (child < 0 && errno == EINTR);
   if (child < 0) FATAL_CODE(BLR_EXIT_IO, "batch: wait failed");
   p->live--;
   pool_failed(p, WIFEXITED(st) ? WEXITSTATUS(st) : BLR_EXIT_INTERNAL);

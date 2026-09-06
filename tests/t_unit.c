@@ -55,12 +55,12 @@ static void t_file_windows(void) {
   bf_move(f, 4096, 0, n + 1);
   bf_read(f, 4096, actual, n + 1);
   CHECK(!memcmp(actual, expected, n + 1), "overlapping backwards expansion");
-  bf_move(f, 0, 4096, n + 1); bf_resize(f, n + 1);
+  bf_move(f, 0, 4096, n + 1);  bf_resize(f, n + 1);
   bf_read(f, 0, actual, n + 1);
   CHECK(f->len == n + 1 && !memcmp(actual, expected, n + 1),
         "overlapping forward compaction and truncation");
   bf_close(f);  bf_close(copy);  free(expected);  free(actual);
-  xt_unlink(path); xt_unlink(path2);
+  xt_unlink(path);  xt_unlink(path2);
 }
 
 /* Interleave several streams, including a control stream that finishes last.
@@ -75,16 +75,16 @@ static void t_chunks(void) {
   int ok;
   xt_section_begin("interleaved archive chunks");
   Fi(BLR_IO_CHUNK + 257, data[i] = (u8) (i * 71 + i / 113));
-  arc_init(&a, 0x09); arc_begin(&a, output);
+  arc_init(&a, 0x09);  arc_begin(&a, output);
   Fi(3, st[i] = arc_newstream(&a));
   bf_write(st[2], 0, data, BLR_IO_CHUNK + 257);
   bf_write(st[1], 0, data, BLR_IO_CHUNK + 17);
   bf_write(st[2], st[2]->len, data, BLR_IO_CHUNK);
   bf_write(st[0], 0, data, 19);
-  arc_finish(&a); n = output->len;
+  arc_finish(&a);  n = output->len;
   CHECK(arc_size(&a) == n, "chunk framing size accounting");
-  arc_free(&a); bf_close(output);
-  input = bf_open(path, 0); arc_read(&b, input);
+  arc_free(&a);  bf_close(output);
+  input = bf_open(path, 0);  arc_read(&b, input);
   CHECK(b.version == ARC_VER && b.n == 3 && b.s[2].len == 2 * BLR_IO_CHUNK + 257,
         "chunk parser restores logical stream lengths");
   bf_read(b.s[1].file, 0, got, BLR_IO_CHUNK + 17);
@@ -94,10 +94,10 @@ static void t_chunks(void) {
         "logical reads span physically interleaved chunks");
   arc_write(&b, path2);
   CHECK(xt_same_file(path, path2), "chunk file writer preserves physical layout");
-  img = slurp(path, &n); arc_parse(&c, img, n); re = arc_emit(&c, &rn);
+  img = slurp(path, &n);  arc_parse(&c, img, n);  re = arc_emit(&c, &rn);
   CHECK(n == rn && !memcmp(img, re, n), "chunk layout re-emits byte for byte");
-  free(re); arc_free(&c); free(img); arc_free(&b); bf_close(input);
-  free(data); free(got); xt_unlink(path); xt_unlink(path2);
+  free(re);  arc_free(&c);  free(img);  arc_free(&b);  bf_close(input);
+  free(data);  free(got);  xt_unlink(path);  xt_unlink(path2);
 }
 
 static void t_ilog(void) {
@@ -146,7 +146,7 @@ static int roundtrip(sz nslots, sz n, int mode) {
   Fi(n,
     slot[i] = (u8) xt_next(&rng, (u32) nslots);
     bit[i] = (u8) (mode == 0 ? xt_next(&rng, 2) : mode == 1 ? 0 : mode == 2 ? 1
-                             : (xt_next(&rng, 100) < 97));
+                             : xt_next(&rng, 100) < 97);
     rc_enc_bit(&e, pe + slot[i], bit[i]));
   len = rc_enc_finish(&e);
   rc_dec_init(&d, rc_enc_data(&e), len);
@@ -199,15 +199,15 @@ static void t_coder_ad(void) {
 static void t_container(void) {
   archive a, b2;
   u8 * img, * blob;
-  sz i, j, k, ns, len, len2;
+  sz i, j, k, len, len2;
   int bad = 0;
   xt_section_begin("container");
   blob = xmalloc(70000);
   Fi(70000, blob[i] = (u8) xt_next(&rng, 256));
-  for (ns = 0; ns <= 6; ns++) {
+  Fi(7,
     arc_init(&a, 0x09);
-    if (ns & 1) { a.ntune = 3;  a.tune[0] = 61;  a.tune[1] = 7;  a.tune[2] = 1; }
-    Fj(ns, arc_push(&a, blob, j == 0 ? 1 : j * j * 700));
+    if (i & 1) { a.ntune = 3;  a.tune[0] = 61;  a.tune[1] = 7;  a.tune[2] = 1; }
+    Fj(i, arc_push(&a, blob, j == 0 ? 1 : j * j * 700));
     img = arc_emit(&a, &len);
     arc_parse(&b2, img, len);
     if (b2.n != a.n || b2.flags != a.flags || b2.ntune != a.ntune
@@ -221,8 +221,7 @@ static void t_container(void) {
     { u8 * img2 = arc_emit(&b2, &len2);
       if (len2 != len || memcmp(img, img2, len)) bad++;
       free(img2); }
-    {
-      const char * path = xt_tmp("container.blr");
+    { const char * path = xt_tmp("container.blr");
       blr_file * file;
       archive streamed;
       u8 * image;
@@ -231,10 +230,8 @@ static void t_container(void) {
       arc_read(&streamed, file);
       image = arc_emit(&streamed, &len2);
       if (len2 != len || memcmp(img, image, len)) bad++;
-      free(image);  arc_free(&streamed);  bf_close(file);  xt_unlink(path);
-    }
-    arc_free(&a);  arc_free(&b2);  free(img);
-  }
+      free(image);  arc_free(&streamed);  bf_close(file);  xt_unlink(path); }
+    arc_free(&a);  arc_free(&b2);  free(img));
   free(blob);
   CHECK(!bad, "%d shapes failed to round-trip", bad);
   CHECK(ARC_BLOCK(0x09) == 32768UL && ARC_SOLID(0x09) == 1
@@ -273,7 +270,7 @@ static void gen(const mdl_cfg * c) {
   mask = top >= 32 ? 0xFFFFFFFFUL : (1UL << top) - 1;
   while (nval < NVAL) {
     s = s * 1103515245UL + 12345;
-    vals[nval++] = (s >> 8) & mask;
+    vals[nval++] = s >> 8 & mask;
   }
 }
 

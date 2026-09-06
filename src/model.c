@@ -57,7 +57,7 @@ static void nzstep(model * m, int nz) {
 }
 
 static void sgstep(model * m, int neg) {
-  m->h1 = (u8) (m->c.shist == 1 ? neg : ((neg + m->h1 * 2) & 3));
+  m->h1 = (u8) (m->c.shist == 1 ? neg : (neg + m->h1 * 2) & 3);
 }
 
 static u32 lenbase(model * m) { return m->blen + m->hl * m->wlen; }
@@ -86,7 +86,7 @@ static u32 inv(model * m, u32 r) {
 void mdl_enc(model * m, rc_enc * e, u32 v) {
   u32 r = fwd(m, v), base, idx, n;
   int i, neg = 0, nz;
-  if (m->c.sgn && (r & 0x80000000UL)) { neg = 1;  r = 0 - r; }
+  if (m->c.sgn && r & 0x80000000UL) { neg = 1;  r = 0 - r; }
   nz = r != 0;
   mbe(m, e, nzslot(m), nz);  nzstep(m, nz);
   if (!nz) return;
@@ -96,13 +96,13 @@ void mdl_enc(model * m, rc_enc * e, u32 v) {
     ("value %lu exceeds a depth-%d length tree", (unsigned long) r, m->c.depth);
   base = lenbase(m);  idx = 1;
   for (i = m->c.depth - 1; i >= 0; i--) {
-    int b = (int) ((((1UL << m->c.depth) | n) >> i) & 1);
+    int b = (int) ((1UL << m->c.depth | n) >> i & 1);
     mbe(m, e, base + idx, b);  idx = idx * 2 + (u32) b;
   }
   m->hl = (u8) (n + 1);
   base = mntbase(m, n);  idx = 1;
   for (i = (int) n - 1; i >= 0; i--) {
-    int b = (int) ((r >> i) & 1);
+    int b = (int) (r >> i & 1);
     mbe(m, e, base + idx, b);
     if (idx < m->c.freeze) idx = (idx * 2 | (u32) b) & (2 * m->c.freeze - 1);
   }

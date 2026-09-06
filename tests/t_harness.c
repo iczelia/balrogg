@@ -245,15 +245,13 @@ const char * xt_tmp(const char * tag) {
   FATAL_UNLESS(strlen(tag) < sizeof tags[0], "t_suite: scratch tag is too long");
   strcpy(tags[used], tag);
 #if defined(BLR_DOS)
-  {
-    char dos[32];
+  { char dos[32];
     const char * ext;
     xt_dos_name(tag, dos, sizeof dos);
     ext = strrchr(dos, '.');
     /* Reserve the prefix inside the eight-character stem. The slot keeps
        different tags distinct even when their shortened 8.3 names collide. */
-    snprintf(buf[used], sizeof buf[used], "ts%02d%s", used, ext ? ext : "");
-  }
+    snprintf(buf[used], sizeof buf[used], "ts%02d%s", used, ext ? ext : ""); }
 #else
   snprintf(buf[used], sizeof buf[used], "t_suite-%s.tmp", tag);
 #endif

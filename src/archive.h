@@ -43,7 +43,7 @@ typedef struct {
   blr_file * file;  sz off;   /*  file slice when data is NULL  */
 } arc_stream;
 
-typedef struct { u32 stream; sz off, len; } arc_chunk;
+typedef struct { u32 stream;  sz off, len; } arc_chunk;
 
 typedef struct {
   u8 version;                 /* current format; other versions are rejected */

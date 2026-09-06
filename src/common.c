@@ -33,7 +33,7 @@ static void progress_draw(int percent) {
   /*  Line-oriented batch/log output needs only twenty checkpoints.  */
   if (blr_progress_enabled == 2 && percent < 100 && percent / 5 == progress_last / 5
       && progress_last >= 0) return;
-  for (i = 0; i < 20; i++) bar[i] = i < percent / 5 ? '#' : '-';
+  Fi(20, bar[i] = i < percent / 5 ? '#' : '-');
   bar[20] = 0;
   fprintf(stderr, "%sbalrogg: %s: %s [%s] %3d%%%s",
           blr_progress_enabled == 1 ? "\r" : "", progress_path, progress_phase,

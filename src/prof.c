@@ -104,7 +104,7 @@ static u8 rbuf[32];
 static int rn;
 
 static void w1(int v) { rbuf[rn++] = (u8) v; }
-static void w2(u32 v) { w1((int) (v & 0xFF));  w1((int) ((v >> 8) & 0xFF)); }
+static void w2(u32 v) { w1((int) (v & 0xFF));  w1((int) (v >> 8 & 0xFF)); }
 static void w4(u32 v) { w2(v & 0xFFFF);  w2(v >> 16); }
 static void pw(int s) {
   if (dump[s] && fwrite(rbuf, 1, (sz) rn, dump[s]) != (sz) rn)

@@ -32,7 +32,7 @@ const int cm_sqt[33] = {
 cm_bit_fn cm_bit = cm_bit_scalar;
 
 static void cm_init(void) {
-  int x, i, j, pi = 0, st, y, n;
+  int x, i, j, pi = 0, st, n;
   static int done = 0;
   if (done) return;
   done = 1;
@@ -49,8 +49,7 @@ static void cm_init(void) {
   }
   for (j = pi; j < 65536; j++) cm_str16[j] = 2047;
 
-  {
-    static u8 ilogt[65536];
+  { static u8 ilogt[65536];
     static u8 t[64][64][2];
     u32 xx = 14155776;
     int b[5];
@@ -62,10 +61,10 @@ static void cm_init(void) {
     }
     memset(t, 0, sizeof t);
     st = 0;
-    for (i = 0; i < 256; i++) for (y = 0; y <= i; y++) {
-      int xv = i - y, a, r;
+    Fi(256, Fj(i + 1,
+      int xv = i - j, a, r;
       /*  num_states(x, y)  */
-      int lo = xv < y ? xv : y, hi = xv < y ? y : xv;
+      int lo = xv < j ? xv : j, hi = xv < j ? j : xv;
       n = 0;
       if (!(hi < 0 || lo < 0 || hi >= 64 || lo >= 64 || lo >= 5 || hi >= b[lo])) {
         if (hi + lo <= 4) {
@@ -75,20 +74,19 @@ static void cm_init(void) {
           n = r;
         } else n = 1 + (lo > 0 && hi + lo < 16);
       }
-      if (n && xv < 64 && y < 64) {
-        t[xv][y][0] = (u8) st;  t[xv][y][1] = (u8) n;  st += n;
-      }
-    }
+      if (n && xv < 64 && j < 64) {
+        t[xv][j][0] = (u8) st;  t[xv][j][1] = (u8) n;  st += n;
+      }));
     st = 0;
-    for (i = 0; i < 64; i++) for (y = 0; y <= i; y++) {
-      int xv = i - y, k;
-      Fk(t[xv][y][1],
-        int x0 = xv, y0 = y, x1 = xv, y1 = y;
+    Fi(64, Fj(i + 1,
+      int xv = i - j, k;
+      Fk(t[xv][j][1],
+        int x0 = xv, y0 = j, x1 = xv, y1 = j;
         if (st < 15) {
           x0++;  y1++;
-          cm_nex[st][0] = (u8) (t[x0][y0][0] + st - t[xv][y][0]);
-          cm_nex[st][1] = (u8) (t[x1][y1][0] + st - t[xv][y][0]
-                             + (xv > 0 ? t[xv - 1][y + 1][1] : 0));
+          cm_nex[st][0] = (u8) (t[x0][y0][0] + st - t[xv][j][0]);
+          cm_nex[st][1] = (u8) (t[x1][y1][0] + st - t[xv][j][0]
+                             + (xv > 0 ? t[xv - 1][j + 1][1] : 0));
         } else {
           /*  next_state(x0,y0,0) and next_state(x1,y1,1), inlined  */
           int p, q, bb, sw;
@@ -100,7 +98,7 @@ static void cm_init(void) {
             else         { p++;  if (q > 2) q = ilogt[q] / 6 - 1; }
             while (!t[p][q][1]) {
               if (q < 2) p--;
-              else { p = (p * (q - 1) + (q / 2)) / q;  q--; }
+              else { p = (p * (q - 1) + q / 2) / q;  q--; }
             }
             if (sw) { int tmp = p;  p = q;  q = tmp; }
             *px = p;  *py = q;
@@ -108,13 +106,11 @@ static void cm_init(void) {
           cm_nex[st][0] = t[x0][y0][0];
           cm_nex[st][1] = (u8) (t[x1][y1][0] + (t[x1][y1][1] > 1));
         }
-        cm_nex[st][2] = (u8) xv;  cm_nex[st][3] = (u8) y;
-        st++);
-    }
+        cm_nex[st][2] = (u8) xv;  cm_nex[st][3] = (u8) j;
+        st++)));
     if (st != 253)
       FATAL_CODE(BLR_EXIT_INTERNAL, "internal: bit history came out at %d states, not 253", st);
-    Fi(256, cm_nexd[i] = (i8) ((cm_nex[i][3] == 0) - (cm_nex[i][2] == 0)));
-  }
+    Fi(256, cm_nexd[i] = (i8) ((cm_nex[i][3] == 0) - (cm_nex[i][2] == 0))); }
 }
 
 /*  The match model's rolling hash.  */

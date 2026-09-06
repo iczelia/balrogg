@@ -80,7 +80,7 @@ static void t_vorbis(void) {
 }
 
 static void t_opus(void) {
-  char ** files = xt_files(".opus"), ** p;
+  char ** files = xt_files(".opus");
   const char * out = xt_tmp("o.out"), * re = xt_tmp("o2.blr");
   char ** arcs;
   long tot[2] = { 0, 0 }, in = 0;
@@ -90,34 +90,35 @@ static void t_opus(void) {
   if (!n) CHECK(0, "no Opus fixtures: is BLR_TEST_DATA set?");
   arcs = xmalloc((sz) (n + 1) * sizeof *arcs);
   /*  Encode at both ends of the effort scale and keep -9 output.  */
-  for (i = 0, p = files; *p; p++, i++) {
+  Fi(n,
     char tag[16];
     sprintf(tag, "o%d.blr", i);
     arcs[i] = xmalloc(strlen(xt_tmp(tag)) + 1);
     strcpy(arcs[i], xt_tmp(tag));
-    CHECK(!opus_pack(*p, arcs[i], 0), "%s: encode at depth 0 failed", xt_basename(*p));
-    CHECK(!opus_unpack(arcs[i], out), "%s: decode at depth 0 failed", xt_basename(*p));
-    CHECK(xt_same_file(*p, out), "%s: not lossless at depth 0", xt_basename(*p));
+    CHECK(!opus_pack(files[i], arcs[i], 0), "%s: encode at depth 0 failed",
+          xt_basename(files[i]));
+    CHECK(!opus_unpack(arcs[i], out), "%s: decode at depth 0 failed",
+          xt_basename(files[i]));
+    CHECK(xt_same_file(files[i], out), "%s: not lossless at depth 0",
+          xt_basename(files[i]));
     tot[0] += xt_file_size(arcs[i]);
-    CHECK(!opus_pack(*p, arcs[i], 6), "%s: encode at depth 6 failed", xt_basename(*p));
+    CHECK(!opus_pack(files[i], arcs[i], 6), "%s: encode at depth 6 failed",
+          xt_basename(files[i]));
     tot[1] += xt_file_size(arcs[i]);
-    in += xt_file_size(*p);
-  }
+    in += xt_file_size(files[i]));
   /*  Decode after all encodes have completed.  */
-  for (i = 0, p = files; *p; p++, i++) {
-    CHECK(!opus_unpack(arcs[i], out), "%s: decode failed", xt_basename(*p));
-    CHECK(xt_same_file(*p, out), "%s: not lossless in a shared process",
-          xt_basename(*p));
-  }
+  Fi(n,
+    CHECK(!opus_unpack(arcs[i], out), "%s: decode failed", xt_basename(files[i]));
+    CHECK(xt_same_file(files[i], out), "%s: not lossless in a shared process",
+          xt_basename(files[i])));
   /*  Re-encode to detect retained history.  */
-  for (i = 0, p = files; *p; p++, i++) {
-    CHECK(!opus_pack(*p, re, 6), "%s: re-encode failed", xt_basename(*p));
+  Fi(n,
+    CHECK(!opus_pack(files[i], re, 6), "%s: re-encode failed", xt_basename(files[i]));
     CHECK(xt_same_file(arcs[i], re), "%s: the archive depends on what was "
-          "encoded before it", xt_basename(*p));
-    xt_trace("%-24s %8ld -> %8ld", xt_basename(*p), xt_file_size(*p),
+          "encoded before it", xt_basename(files[i]));
+    xt_trace("%-24s %8ld -> %8ld", xt_basename(files[i]), xt_file_size(files[i]),
              xt_file_size(arcs[i]));
-    xt_unlink(arcs[i]);  free(arcs[i]);
-  }
+    xt_unlink(arcs[i]);  free(arcs[i]));
   xt_section_begin("effort scale");
   CHECK(!n || tot[1] <= tot[0], "depth 6 (%ld bytes) is larger than depth 0 "
         "(%ld bytes)", tot[1], tot[0]);
@@ -148,7 +149,7 @@ static void t_no_eos(void) {
     }
     for (copies = 0; copies <= 2; copies += 2) {
       sz tail = (sz) copies * n + last;
-      for (k = 0; k <= copies; k++) memcpy(joined + (sz) k * n, b, n);
+      Fk(copies + 1, memcpy(joined + (sz) k * n, b, n));
       joined[tail + 5] &= (u8) ~4;
       ogg_crc_set(joined + tail, n - last);
       spew(in, joined, (sz) (copies + 1) * n);
@@ -175,8 +176,7 @@ static void t_no_eos(void) {
 }
 
 void xt_run_files(void) {
-  {
-    const char * in = xt_fixture(xt_data, "chain3.ogg");
+  { const char * in = xt_fixture(xt_data, "chain3.ogg");
     const char * arc = xt_tmp("reset.blr"), * out = xt_tmp("reset.out");
     vb_opt o;
     int i;

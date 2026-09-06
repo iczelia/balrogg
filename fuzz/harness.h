@@ -99,7 +99,7 @@ static void fz_fixcrc(u8 * b, sz n) {
     nseg = b[at + 26];
     if (at + 27 + nseg > n) break;
     blen = 0;
-    for (i = 0; i < nseg; i++) blen += b[at + 27 + i];
+    Fi(nseg, blen += b[at + 27 + i]);
     tot = 27 + nseg + blen;
     if (at + tot > n) break;
     ogg_crc_set(b + at, tot);

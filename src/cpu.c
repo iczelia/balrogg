@@ -22,7 +22,7 @@
 static int probe(void) {
   unsigned a, b, c, d;
   if (!__get_cpuid(1, &a, &b, &c, &d)) return 0;
-  return (d >> 26) & 1;
+  return d >> 26 & 1;
 }
 #define BLR_SSE2_KERNEL 1
 #else

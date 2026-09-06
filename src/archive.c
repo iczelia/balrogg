@@ -25,8 +25,8 @@ void arc_init(archive * a, u8 flags) {
 
 void arc_free(archive * a) {
   sz i;
-  Fi(a->n, free(a->s[i].data); if (a->s[i].owned) bf_close(a->s[i].file));
-  free(a->chunks); a->chunks = NULL;
+  Fi(a->n, free(a->s[i].data);  if (a->s[i].owned) bf_close(a->s[i].file));
+  free(a->chunks);  a->chunks = NULL;
   bf_close(a->backing);  a->backing = NULL;
   free(a->s);  a->s = NULL;  a->n = a->cap = 0;
 }
@@ -56,7 +56,7 @@ void arc_take(archive * a, u8 * data, sz len) {
 
 void arc_parse(archive * a, const u8 * buf, sz len) {
   blr_file * f = bf_memory(buf, len);
-  arc_read(a, f); a->backing = f;
+  arc_read(a, f);  a->backing = f;
 }
 
 sz arc_size(const archive * a) {
@@ -77,14 +77,14 @@ static int chunk_next(const archive * a, sz * index, arc_chunk * q) {
   sz i, at = *index;
   if (a->nchunks) {
     if (at == a->nchunks) return 0;
-    *q = a->chunks[at]; (*index)++; return 1;
+    *q = a->chunks[at];  (*index)++;  return 1;
   }
   Fi(a->n,
     sz count = 1 + (a->s[i].len - 1) / BLR_IO_CHUNK;
     if (at < count) {
-      q->stream = (u32) i + 1; q->off = at * BLR_IO_CHUNK;
+      q->stream = (u32) i + 1;  q->off = at * BLR_IO_CHUNK;
       q->len = MIN(BLR_IO_CHUNK, a->s[i].len - q->off);
-      (*index)++; return 1;
+      (*index)++;  return 1;
     }
     at -= count);
   return 0;
@@ -95,20 +95,20 @@ u8 * arc_emit(const archive * a, sz * len) {
   arc_chunk q;
   u8 * b = xmalloc(n);
   memcpy(b, ARC_MAGIC, ARC_MAGLEN);
-  b[ARC_MAGLEN] = ARC_VER; b[ARC_MAGLEN + 1] = a->flags;
-  b[at++] = a->ntune; memcpy(b + at, a->tune, a->ntune); at += a->ntune;
+  b[ARC_MAGLEN] = ARC_VER;  b[ARC_MAGLEN + 1] = a->flags;
+  b[at++] = a->ntune;  memcpy(b + at, a->tune, a->ntune);  at += a->ntune;
   while (chunk_next(a, &c, &q)) {
     const arc_stream * st = a->s + q.stream - 1;
-    Fj(4, b[at + j] = (u8) (q.stream >> (8 * j));
-          b[at + 4 + j] = (u8) (q.len >> (8 * j)));
+    Fj(4, b[at + j] = (u8) (q.stream >> 8 * j);
+          b[at + 4 + j] = (u8) (q.len >> 8 * j));
     at += 8;
     if (st->file) bf_read(st->file, st->off + q.off, b + at, q.len);
     else memcpy(b + at, st->data + q.off, q.len);
     at += q.len;
   }
-  memset(b + at, 0, 4); at += 4;
+  memset(b + at, 0, 4);  at += 4;
   FATAL_UNLESS(at == n, "internal: chunk archive size mismatch");
-  *len = n; return b;
+  *len = n;  return b;
 }
 
 void arc_slice(archive * a, blr_file * file, sz off, sz len) {
@@ -119,7 +119,7 @@ void arc_slice(archive * a, blr_file * file, sz off, sz len) {
 void arc_begin(archive * a, blr_file * output) {
   u8 h[ARC_HDRLEN + 1 + ARC_TUNEMAX];
   sz n = ARC_HDRLEN;
-  arc_size(a); a->output = output;
+  arc_size(a);  a->output = output;
   memcpy(h, ARC_MAGIC, ARC_MAGLEN);
   h[ARC_MAGLEN] = ARC_VER;  h[ARC_MAGLEN + 1] = a->flags;
   h[n++] = a->ntune;  memcpy(h + n, a->tune, a->ntune);  n += a->ntune;
@@ -144,17 +144,18 @@ void arc_finish(archive * a) {
 }
 
 static void chunk_read(archive * a, blr_file * file, sz pos) {
+  sz i;
   for (;;) {
     u8 h[8];
     u32 id = 0, len = 0;
-    sz i, old;
+    sz old;
     FATAL_UNLESS(pos <= file->len && file->len - pos >= 4, "truncated chunk list");
     bf_readmeta(file, pos, h, 4);  pos += 4;
-    Fi(4, id |= (u32) h[i] << (8 * i));
+    Fi(4, id |= (u32) h[i] << 8 * i);
     if (!id) break;
     FATAL_UNLESS(id <= file->len / 9 && file->len - pos >= 4, "invalid chunk stream");
     bf_readmeta(file, pos, h + 4, 4);  pos += 4;
-    Fi(4, len |= (u32) h[i + 4] << (8 * i));
+    Fi(4, len |= (u32) h[i + 4] << 8 * i);
     FATAL_UNLESS(len && len <= BLR_IO_CHUNK && len <= file->len - pos,
                  "invalid chunk length");
     while (a->n < id) {
@@ -176,7 +177,7 @@ static void chunk_read(archive * a, blr_file * file, sz pos) {
     pos += len;
   }
   FATAL_UNLESS(pos == file->len, "trailing archive bytes");
-  { sz i; Fi(a->n, FATAL_UNLESS(a->s[i].file->len, "missing archive stream")); }
+  Fi(a->n, FATAL_UNLESS(a->s[i].file->len, "missing archive stream"));
 }
 
 void arc_write(const archive * a, const char * path) {
@@ -187,18 +188,18 @@ void arc_write(const archive * a, const char * path) {
   arc_size(a);
   out = bf_open(path, 1);
   memcpy(h, ARC_MAGIC, ARC_MAGLEN);
-  h[ARC_MAGLEN] = ARC_VER; h[ARC_MAGLEN + 1] = a->flags;
-  h[n++] = a->ntune; memcpy(h + n, a->tune, a->ntune); n += a->ntune;
+  h[ARC_MAGLEN] = ARC_VER;  h[ARC_MAGLEN + 1] = a->flags;
+  h[n++] = a->ntune;  memcpy(h + n, a->tune, a->ntune);  n += a->ntune;
   bf_write(out, 0, h, n);
   while (chunk_next(a, &c, &q)) {
     const arc_stream * st = a->s + q.stream - 1;
-    Fj(4, ch[j] = (u8) (q.stream >> (8 * j));
-          ch[j + 4] = (u8) (q.len >> (8 * j)));
+    Fj(4, ch[j] = (u8) (q.stream >> 8 * j);
+          ch[j + 4] = (u8) (q.len >> 8 * j));
     bf_write(out, out->len, ch, sizeof ch);
     if (st->file) bf_copy(out, st->file, st->off + q.off, q.len);
     else bf_write(out, out->len, st->data + q.off, q.len);
   }
-  memset(ch, 0, 4); bf_write(out, out->len, ch, 4); bf_close(out);
+  memset(ch, 0, 4);  bf_write(out, out->len, ch, 4);  bf_close(out);
 }
 
 void arc_read(archive * a, blr_file * file) {
@@ -213,6 +214,6 @@ void arc_read(archive * a, blr_file * file) {
   a->ntune = bf_get(file, pos++);
   FATAL_UNLESS(a->ntune <= ARC_TUNEMAX && a->ntune <= file->len - pos,
                "invalid tune length %u", a->ntune);
-  bf_read(file, pos, a->tune, a->ntune); pos += a->ntune;
+  bf_read(file, pos, a->tune, a->ntune);  pos += a->ntune;
   chunk_read(a, file, pos);
 }

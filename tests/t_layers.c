@@ -43,20 +43,20 @@ static u32 pagesamples(const pinfo * q, u32 b0, u32 b1) {
   Fi(q->p.np,
     u8 f = q->p.plen[i] ? q->body[at] : 1;
     at += q->p.plen[i];
-    if (!(f & 1)) s += (((f >> 1) & 1) ? b1 : b0) / 2);
+    if (!(f & 1)) s += (f >> 1 & 1 ? b1 : b0) / 2);
   return s;
 }
 
 static int isheader(const pinfo * q) {
-  return q->p.np > 0 && q->p.plen[0] > 0 && (q->body[0] & 1);
+  return q->p.np > 0 && q->p.plen[0] > 0 && q->body[0] & 1;
 }
 
 /*  Parse pages and links using codec.c's header-repeat rule.  */
 static int parse(const char * path, parsed * f) {
   u8 * key[MAXLINK];
   sz klen[MAXLINK], kset[MAXLINK], nset = 0, at = 0, got, kl, cap = 64;
-  int n = 0, i, j, m, nkey = 0, eos = 1;
-  u8 * k;
+  int n = 0, i, j, k, nkey = 0, eos = 1;
+  u8 * keybuf;
 
   f->buf = slurp(path, &f->len);
   f->pg = xmalloc(cap * sizeof *f->pg);
@@ -72,7 +72,7 @@ static int parse(const char * path, parsed * f) {
   }
   f->n = n;
   Fi(n,
-    if ((f->pg[i].p.type & 2) && eos) { f->pg[i].first = 1;  eos = 0; }
+    if (f->pg[i].p.type & 2 && eos) { f->pg[i].first = 1;  eos = 0; }
     if (f->pg[i].p.type & 4) eos = 1);
   if (!n || !f->pg[0].first) { CHECK(0, "%s: does not start a bitstream", path);  return 0; }
 
@@ -83,21 +83,20 @@ static int parse(const char * path, parsed * f) {
     if (f->pg[i].p.blen <= 28) { CHECK(0, "%s: link at page %d has no identification header", path, i);  return 0; }
     b0 = 1UL << (f->pg[i].body[28] & 15);  b1 = 1UL << (f->pg[i].body[28] >> 4);
     kl = 0;
-    for (m = i; m < j; m++) if (isheader(f->pg + m)) kl += f->pg[m].p.blen;
-    k = xmalloc(kl + 1);  kl = 0;
-    for (m = i; m < j; m++)
-      if (isheader(f->pg + m)) { memcpy(k + kl, f->pg[m].body, f->pg[m].p.blen);  kl += f->pg[m].p.blen; }
-    for (m = 0; m < nkey; m++)
-      if (klen[m] == kl && !memcmp(key[m], k, kl)) { dup = m;  break; }
-    if (nkey >= MAXLINK) { CHECK(0, "%s: over %d links", path, MAXLINK);  free(k);  return 0; }
-    key[nkey] = k;  klen[nkey] = kl;
+    for (k = i; k < j; k++) if (isheader(f->pg + k)) kl += f->pg[k].p.blen;
+    keybuf = xmalloc(kl + 1);  kl = 0;
+    for (k = i; k < j; k++)
+      if (isheader(f->pg + k)) { memcpy(keybuf + kl, f->pg[k].body, f->pg[k].p.blen);  kl += f->pg[k].p.blen; }
+    Fk(nkey, if (klen[k] == kl && !memcmp(key[k], keybuf, kl)) { dup = k;  break; });
+    if (nkey >= MAXLINK) { CHECK(0, "%s: over %d links", path, MAXLINK);  free(keybuf);  return 0; }
+    key[nkey] = keybuf;  klen[nkey] = kl;
     /*  Point repeated headers to their prior setup. Zero means a new setup.  */
     kset[nkey] = dup >= 0 ? kset[dup] : nset++;
     f->pg[i].setup = dup >= 0 ? (int) kset[nkey] + 1 : 0;
     nkey++;
-    for (m = i; m < j; m++) {
-      f->pg[m].samples = pagesamples(f->pg + m, b0, b1);
-      if (dup >= 0 && m != i && isheader(f->pg + m)) f->pg[m].skip = 1;
+    for (k = i; k < j; k++) {
+      f->pg[k].samples = pagesamples(f->pg + k, b0, b1);
+      if (dup >= 0 && k != i && isheader(f->pg + k)) f->pg[k].skip = 1;
     }
   }
   Fi(nkey, free(key[i]));
@@ -149,15 +148,15 @@ static void t_pages(const char * path, parsed * f) {
   ogg_hdr_free(&h);  ogg_hdr_init(&h);
   rc_dec_init(&d, rc_enc_data(&e), olen);
   img = xmalloc(OGG_HDRMIN + OGG_MAXSEG + MAXPAY);
-  for (i = 0; i < f->n && !bad; i++) {
+  Fi(f->n,
+    if (bad) break;
     if (f->pg[i].first) ogg_hdr_reset(&h);
     if (!f->pg[i].skip) {
       ogg_hdr_dec(&h, &d, &q, f->pg[i].first);
       got = q.blen == f->pg[i].p.blen ? ogg_emit(&q, img, f->pg[i].body) : 0;
       if (got != f->pg[i].len || memcmp(img, f->buf + f->pg[i].off, got)) bad = i + 1;
     }
-    ogg_hdr_step(&h, f->pg[i].samples);
-  }
+    ogg_hdr_step(&h, f->pg[i].samples));
   CHECK(!bad, "%s: page %d rebuilt wrong", xt_basename(path), bad - 1);
   xt_trace("%s: %d pages (%d coded) -> %lu header bytes", xt_basename(path),
            f->n, nc, (unsigned long) olen);
@@ -191,18 +190,18 @@ static void t_setup(const char * path, parsed * f) {
   rc_dec_init(&d, rc_enc_data(&e), olen);
   img = xmalloc(MAXPAY);
   w = 0;
-  for (i = 0; i < f->n && !bad; i++) {
+  Fi(f->n,
+    if (bad) break;
     sz atp = 0;
     if (f->pg[i].first) { vb_link(&v);  w = 0; }
     if (!isheader(f->pg + i)) continue;
-    for (j = 0; j < f->pg[i].p.np && !bad; j++) {
+    Fj(f->pg[i].p.np,
+      if (bad) break;
       if (!f->pg[i].skip) {
         vb_hdr_dec(&v, &d, w, img, f->pg[i].p.plen[j]);
         if (memcmp(img, f->pg[i].body + atp, f->pg[i].p.plen[j])) bad = i + 1;
       }
-      atp += f->pg[i].p.plen[j];  w++;
-    }
-  }
+      atp += f->pg[i].p.plen[j];  w++););
   CHECK(!bad, "%s: a header packet on page %d rebuilt wrong", xt_basename(path), bad - 1);
   xt_trace("%s: %d header packets -> %lu bytes", xt_basename(path), np,
            (unsigned long) olen);
@@ -248,7 +247,8 @@ static void t_audio(const char * path, parsed * f) {
   rc_dec_init(&dt, rc_enc_data(&et), tlen);
   img = xmalloc(OGG_HDRMIN + OGG_MAXSEG + MAXPAY);
   w = 0;
-  for (i = 0; i < f->n && !bad; i++) {
+  Fi(f->n,
+    if (bad) break;
     sz atp = 0;
     if (f->pg[i].first) {
       vb_link(&v);  ogg_hdr_reset(&h);  w = 0;
@@ -260,7 +260,8 @@ static void t_audio(const char * path, parsed * f) {
       if (got != f->pg[i].len || memcmp(img, f->buf + f->pg[i].off, got)) { bad = i + 1;  break; }
     }
     ogg_hdr_step(&h, f->pg[i].samples);
-    for (j = 0; j < f->pg[i].p.np && !bad; j++) {
+    Fj(f->pg[i].p.np,
+      if (bad) break;
       const u8 * pk = f->pg[i].body + atp;
       sz pl = f->pg[i].p.plen[j];
       atp += pl;
@@ -273,10 +274,8 @@ static void t_audio(const char * path, parsed * f) {
       nb = vb_aud_dec(&v, &db, &dm, &dt, img, pl, f->pg[i].p.type & 1);
       /*  Compare all consumed bits before writer padding.  */
       Fk(nb,
-        if (((img[k >> 3] >> (k & 7)) & 1) != ((pk[k >> 3] >> (k & 7)) & 1))
-          { bad = i + 1;  break; });
-    }
-  }
+        if ((img[k >> 3] >> (k & 7) & 1) != (pk[k >> 3] >> (k & 7) & 1))
+          { bad = i + 1;  break; })););
   CHECK(!bad, "%s: page %d rebuilt wrong", xt_basename(path), bad - 1);
   xt_trace("%s: %d audio packets -> %lu + %lu + %lu bytes", xt_basename(path),
            na, (unsigned long) blen, (unsigned long) mlen, (unsigned long) tlen);
