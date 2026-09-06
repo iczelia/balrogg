@@ -63,7 +63,7 @@ static void cm_init(void) {
     st = 0;
     Fi(256, Fj(i + 1,
       int xv = i - j, a, r;
-      /*  num_states(x, y)  */
+      /*  Count the states needed for xv zero bits and j one bits.  */
       int lo = xv < j ? xv : j, hi = xv < j ? j : xv;
       n = 0;
       if (!(hi < 0 || lo < 0 || hi >= 64 || lo >= 64 || lo >= 5 || hi >= b[lo])) {
@@ -88,7 +88,7 @@ static void cm_init(void) {
           cm_nex[st][1] = (u8) (t[x1][y1][0] + st - t[xv][j][0]
                              + (xv > 0 ? t[xv - 1][j + 1][1] : 0));
         } else {
-          /*  next_state(x0,y0,0) and next_state(x1,y1,1), inlined  */
+          /*  Find the next counts after a zero bit and after a one bit.  */
           int p, q, bb, sw;
           for (bb = 0; bb < 2; bb++) {
             int * px = bb ? &x1 : &x0, * py = bb ? &y1 : &y0;
@@ -116,7 +116,8 @@ static void cm_init(void) {
 /*  The match model's rolling hash.  */
 #define MMUL  773u
 
-/*  MMUL to the CM_MMIN, the weight of the digit leaving the hash window.  */
+/*  Return MMUL raised to CM_MMIN so the oldest digit can be subtracted
+    from the rolling hash.  */
 static u32 mmul_out(void) {
   u32 m = 1;
   int i;
@@ -135,7 +136,7 @@ void cm_new(cm * c, int nst, int bits, int nsel, int lr, int lim) {
   Fi(nst,
     cm_stage * s = c->st + i;
     s->hist = xcalloc((sz) 1 << bits, 1);
-    /*  The state map starts at the count-based estimate of each state.  */
+    /*  Estimate the probability of a one bit from each state's bit counts.  */
     s->sm = xmalloc(256 * sizeof *s->sm);
     Fk(256,
       int n0 = cm_nex[k][2], n1 = cm_nex[k][3];
@@ -146,7 +147,9 @@ void cm_new(cm * c, int nst, int bits, int nsel, int lr, int lim) {
       if (p < 1) p = 1;
       if (p > 65534) p = 65534;
       s->sm[k] = p << 16);
-    /*  Weights align for SSE2 loads; the first input starts at unity.  */
+    /*  Align the weights to 16 bytes for SSE2 loads.  Start each set with
+        weight 32767 (about 1.0) for the caller's prediction and zero for
+        all other inputs.  */
     s->raw = xcalloc((sz) nsel * CM_NI + CM_NI, sizeof(short));
     s->w = s->raw;
     while (((sz) s->w & 15) != 0) s->w++;
@@ -188,13 +191,15 @@ void cm_match_push(cm * c, i32 val) {
   } else c->mlen = 0;
   if (c->mpos < CM_MMIN) return;
   h = c->mhash * 0x9E3779B1u;
-  /*  Store a hash check above the ring position.  */
+  /*  Use the upper bits for a hash check and the lower bits for the
+      position in the ring buffer.  */
   chk = h << CM_MTBITS >> CM_MHBITS << CM_MHBITS;
   h >>= 32 - CM_MTBITS;
   if (!c->mlen) {
     p = c->mtab[h];
     if ((p & ~MMASK) == chk && (p & MMASK) != 0) {
-      /*  Resolve the newest position, then verify it against the ring.  */
+      /*  Find the most recent absolute position for this ring-buffer slot,
+          then compare preceding digits to measure the match.  */
       p = c->mpos - ((c->mpos - p) & MMASK);
       u32 n = 0;
       while (n < CM_MMAX && n < p &&
