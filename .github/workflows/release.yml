@@ -190,6 +190,7 @@ jobs:
           msystem: ${{ matrix.target.msystem }}
           install: >-
             make tar gzip diffutils coreutils grep sed gawk
+            mingw-w64-ucrt-x86_64-python
             ${{ matrix.target.toolchain }}
 
       - name: Extract the source package
@@ -215,7 +216,7 @@ jobs:
         if: ${{ matrix.target.name != 'i686-win95' }}
         run: |
           binary="$PWD/target/balrogg-${{ matrix.target.name }}.exe"
-          python contrib/check-win-unicode.py "$(cygpath -w "$binary")" \
+          /ucrt64/bin/python.exe contrib/check-win-unicode.py "$(cygpath -w "$binary")" \
             "$(cygpath -w "$PWD/tests/data")"
 
       - name: Show the test logs
