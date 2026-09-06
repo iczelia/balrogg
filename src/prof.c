@@ -16,16 +16,13 @@
 
 #ifdef BLR_PROFILE
 
-#include "rc.h"
-#include "vorbis.h"
-
 #include <errno.h>
 #include <math.h>
-#include <sys/stat.h>
 #ifdef BLR_WIN32
 #include <direct.h>
 #define blr_mkdir(d) _mkdir(d)
 #else
+#include <sys/stat.h>
 #define blr_mkdir(d) mkdir(d, 0777)
 #endif
 

@@ -21,13 +21,12 @@
 #include "yarg.h"
 #include "opusmode.h"
 #include "cpu.h"
-#include "win32.h"
+#include "prof.h"
 
 #include <errno.h>
 #include <limits.h>
 #ifdef BLR_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "win32.h"
 #else
 #include <sys/stat.h>
 #endif

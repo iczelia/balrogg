@@ -13,10 +13,8 @@
     along with this program. If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "file.h"
-#include "win32.h"
 #ifdef BLR_WIN32
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
+#include "win32.h"
 #else
 #include <sys/types.h>
 #include <unistd.h>

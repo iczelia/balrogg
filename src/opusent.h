@@ -117,8 +117,8 @@ typedef struct {
 
 extern int orec_mode;
 
-/*  Live CELT decoder context. orec_C is currently unused by the model.  */
-extern int orec_band, orec_ch, orec_LM, orec_C, orec_intra;
+/*  Live CELT decoder context.  */
+extern int orec_band, orec_ch, orec_LM, orec_intra;
 extern int orec_pvqN, orec_pvqK, orec_ftb;
 
 /*  The model, in opusmode.c.  Returns the value; in ANALYZE it echoes op->v.  */
