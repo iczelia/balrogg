@@ -69,8 +69,9 @@ Results for a five-megabyte music file follow.
 ## Caveats
 
 The encoder refuses files it cannot reproduce exactly, including files with
-bad checksums, invalid page sequences, unsupported Vorbis features, or no final
-end-of-stream page.
+bad checksums, invalid page sequences, or unsupported Vorbis features.
+Vorbis files missing the final end-of-stream flag are supported when they end
+on a complete packet.
 
 Vorbis packets with extra padding or alternative floor subclass choices retain
 normal floor and residue compression. Classword corrections and padding are

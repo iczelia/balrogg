@@ -153,8 +153,9 @@ Input and output must be seekable.
 Opus mode supports one mono or stereo logical stream with channel mapping
 family 0, with packets (including headers) up to 61,440 bytes.
 Vorbis floor type 0 and codebook lookup type 2 are unsupported.
-Pages with bad checksums and files without a final end-of-stream page are also
-refused.
+Pages with bad checksums are refused.
+Vorbis files without a final end-of-stream flag are supported when they end on
+a complete packet.
 .SH EXAMPLES
 .nf
 balrogg e track.ogg track.blr

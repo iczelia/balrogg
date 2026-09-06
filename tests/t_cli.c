@@ -471,8 +471,11 @@ static void t_constructed(void) {
   ob_page(&o, &p, b + last + OGG_HDRMIN + p.nseg);
   spew(in, o.b, o.n);
   sprintf(args, "e \"%s\" \"%s\"", in, arc);
-  CHECK(xt_run(args, log) == BLR_EXIT_REFUSED && xt_file_contains(log, "end-of-stream"),
-        "a file without an end-of-stream page is refused");
+  CHECK(xt_run(args, log) == 0,
+        "a file without an end-of-stream page encodes");
+  sprintf(args, "d \"%s\" \"%s\"", arc, out);
+  CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
+        "a file without an end-of-stream page round-trips");
   free(o.b);
 
   /*  Two links sharing a merged header page, of different lengths.  */

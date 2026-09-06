@@ -326,7 +326,6 @@ static archive pack_once(blr_file * input, const char * in,
                  (unsigned long) i);
     lk[nl - 1].z = (int) i;
     if (pg[i].type & 4) eos = 1);
-  FATAL_UNLESS(eos, "%s: final bitstream has no end-of-stream page", in);
 
   /*  Find whole-link and header-page repeats in one pass.  */
   for (l = 0; l < nl; l++) {
@@ -395,6 +394,11 @@ static archive pack_once(blr_file * input, const char * in,
         FATAL_CODE(BLR_EXIT_INTERNAL, "internal: link %d replays an unkept header", l);
       mdl_enc(&hrep, &e0, (u32) (nkeep - 1 - m));
     } else rc_enc_bit(&e0, cp + C_KEEP, lk[l].keep);
+    { u32 pages = 0;
+      int k;
+      for (k = lk[l].a; k <= lk[l].z; k++) if (!pg[k].skip) pages++;
+      for (k = 31; k >= 0; k--)
+        rc_enc_bit_raw(&e0, 0x8000, (int) ((pages >> k) & 1)); }
     enc_link(&v, &h, &a, pg, lk + l, ARC_SOLID(o->flags) || l == 0, input);
     if (lk[l].rec) recl[nrec++] = l;
     if (lk[l].keep) keepl[nkeep++] = l;
@@ -523,7 +527,7 @@ void vb_unpack(const char * in, const char * out) {
     u32 carry = 0;
     int isrec, isdup, iskeep = 0, w = 0, first = 1, done = 0, cur, r, cont = 0;
     int hpk = 0;                  /*  header packets the replayed pages hold  */
-    u32 ser = 0;
+    u32 ser = 0, pages = 0;
 
     /*  A spent control stream could otherwise replay forever.  */
     FATAL_UNLESS(!rc_dec_spent(&d0), "%s: the control stream ran out", in);
@@ -549,6 +553,11 @@ void vb_unpack(const char * in, const char * out) {
       cur = keep[cur].setup;
     } else { iskeep = rc_dec_bit(&d0, cp + C_KEEP);  cur = nset++; }
 
+    {
+      int k;
+      Fk(32, pages = (pages << 1) | (u32) rc_dec_bit_raw(&d0, 0x8000));
+      FATAL_UNLESS(pages, "%s: a link has no coded pages", in);
+    }
     FATAL_UNLESS(si + 2 < a.n, "%s: incomplete stream chain", in);
     rc_dec_file(&dt, a.s[si].file, a.s[si].off, a.s[si].len);
     rc_dec_file(&dm, a.s[si + 1].file, a.s[si + 1].off, a.s[si + 1].len);
@@ -613,8 +622,13 @@ void vb_unpack(const char * in, const char * out) {
       ogg_hdr_step(&h, samples(&v, &q, body, &carry));
       blr_progress_update(progress_base + MIN(dt.pos, dt.len)
                           + MIN(dm.pos, dm.len) + MIN(db.pos, db.len));
-      if (q.type & 4) done = 1;
+      done = !--pages;
+      FATAL_UNLESS(!(q.type & 4) || done,
+                   "%s: page count extends past end of stream", in);
+      FATAL_UNLESS(!done || (q.type & 4) || si == a.n,
+                   "%s: a non-final link has no end-of-stream page", in);
     }
+    FATAL_UNLESS(!cont, "%s: link ends in a continued packet", in);
     vb_endlink(&v);
     progress_base += dt.len + dm.len + db.len;
     bf_dropcache(dt.file); bf_dropcache(dm.file); bf_dropcache(db.file);

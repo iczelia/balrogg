@@ -18,6 +18,7 @@
 #include "t_harness.h"
 #include "archive.h"
 #include "codec.h"
+#include "ogg.h"
 #include "opusmode.h"
 
 /*  The options main.c derives from levels -1 and -9.  */
@@ -125,6 +126,54 @@ static void t_opus(void) {
   free(arcs);  xt_files_free(files);
 }
 
+/*  EOF may follow a complete packet without setting the final page's EOS
+    flag. Prefixing complete copies also exercises link and header replay.  */
+static void t_no_eos(void) {
+  static const char * const names[] = {
+    "tiny.ogg", "chain3.ogg", "chain_cont.ogg"
+  };
+  const char * in = xt_tmp("noeos.ogg"), * arc = xt_tmp("noeos.blr");
+  const char * out = xt_tmp("noeos.out");
+  int i, copies, lev, k;
+  xt_section_begin("Vorbis without final EOS");
+  Fi(3,
+    sz n, at, got, last = 0;
+    u8 * b = slurp(xt_fixture(xt_data, names[i]), &n);
+    u8 * joined = xmalloc(3 * n);
+    ogg_page p;
+    for (at = 0; at < n; at += got) {
+      got = ogg_parse(&p, b + at, n - at);
+      FATAL_UNLESS(got, "invalid no-EOS fixture");
+      last = at;
+    }
+    for (copies = 0; copies <= 2; copies += 2) {
+      sz tail = (sz) copies * n + last;
+      for (k = 0; k <= copies; k++) memcpy(joined + (sz) k * n, b, n);
+      joined[tail + 5] &= (u8) ~4;
+      ogg_crc_set(joined + tail, n - last);
+      spew(in, joined, (sz) (copies + 1) * n);
+      for (lev = 1; lev <= 9; lev += 8) {
+        vb_opt o;
+        archive a;
+        u8 * image;
+        sz len;
+        level(&o, lev);
+        if (copies) o.flags &= (u8) ~8;
+        vb_pack(in, arc, &o);  vb_unpack(arc, out);
+        CHECK(xt_same_file(in, out), "%s without EOS, %d copies, -%d",
+              names[i], copies, lev);
+        image = slurp(arc, &len);
+        arc_parse(&a, image, len);
+        arc_write(&a, out);
+        CHECK(xt_same_file(arc, out), "page-count archive write is exact");
+        arc_free(&a);  free(image);
+        t_reemit(arc);
+      }
+    }
+    free(joined);  free(b));
+  xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
+}
+
 void xt_run_files(void) {
   {
     const char * in = xt_fixture(xt_data, "chain3.ogg");
@@ -142,4 +191,5 @@ void xt_run_files(void) {
   }
   t_vorbis();
   t_opus();
+  t_no_eos();
 }
