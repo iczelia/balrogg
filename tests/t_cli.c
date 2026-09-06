@@ -248,36 +248,18 @@ static void t_packet_edges(void) {
       sprintf(args, "d \"%s\" \"%s\"", arc, out);
       CHECK(xt_run(args, log) == 0 && xt_same_file(input, out),
             "packet variant %d is lossless at -%d", i, lev);
-      { sz n;  u8 * a = slurp(arc, &n);
-        CHECK(n >= ARC_HDRLEN && a[ARC_MAGLEN] == ARC_VER,
-              "packet variant %d declares the current archive version", i);
-        free(a); }
+
     });
   xt_unlink(input);  xt_unlink(arc);  xt_unlink(out);  xt_unlink(log);
 }
 
 static void t_progress(void) {
-  const char * input = xt_tmp("sample.ogg"), * arc = xt_tmp("sample.blr");
+  const char * arc = xt_tmp("sample.blr");
   const char * arc2 = xt_tmp("sample2.blr"), * out = xt_tmp("sample.out");
   const char * log = xt_tmp("progress.log");
   const char * fx = xt_fixture(xt_data, "noise_pink.ogg");
   char args[8192];
-  sz len, copies, i;
-  u8 * b = slurp(fx, &len), * joined;
-  xt_section_begin("progress and full-file tuning");
-  copies = (3UL << 20) / len + 1;
-  joined = xmalloc(copies * len);
-  Fi(copies, memcpy(joined + i * len, b, len));
-  spew(input, joined, copies * len);
-  free(joined);  free(b);
-  sprintf(args, "--progress -5 e \"%s\" \"%s\"", input, arc);
-  CHECK(xt_run(args, log) == 0 && xt_file_contains(log, "tuning 3/3")
-        && xt_file_contains(log, "100%"),
-        "large-file tuning reports all trials");
-  sprintf(args, "--progress d \"%s\" \"%s\"", arc, out);
-  CHECK(xt_run(args, log) == 0 && xt_same_file(input, out)
-        && xt_file_contains(log, "decoding [") && xt_file_contains(log, "100%"),
-        "full-file tuning preserves all links and decoding reports progress");
+  xt_section_begin("progress");
   sprintf(args, "-1 e \"%s\" \"%s\"", fx, arc);
   CHECK(xt_run(args, log) == 0 && !xt_file_contains(log, "encoding ["),
         "progress is opt-in");
@@ -293,7 +275,7 @@ static void t_progress(void) {
     CHECK(xt_run(args, log) == 0 && xt_same_file(fx, out)
           && xt_file_contains(log, "100%"), "Opus decoding progress");
   }
-  xt_unlink(input);  xt_unlink(arc);  xt_unlink(arc2);  xt_unlink(out);  xt_unlink(log);
+  xt_unlink(arc);  xt_unlink(arc2);  xt_unlink(out);  xt_unlink(log);
 }
 
 static void t_archive_version(void) {

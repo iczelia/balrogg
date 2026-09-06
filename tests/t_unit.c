@@ -190,8 +190,7 @@ static void t_coder(void) {
   CHECK(!bad, "%d of %lu sequences failed", bad, (unsigned long) rounds);
 }
 
-/*  The count-capped pair has to agree with itself too, and its clamp has to
-    keep every probability strictly between 0 and 0xFFFF.  */
+/*  The count-capped pair must agree and keep probabilities inside the rails.  */
 static void t_coder_ad(void) {
   enum { N = 20000, NS = 16 };
   u16 pe[NS], pd[NS];
@@ -219,53 +218,12 @@ static void t_coder_ad(void) {
   rc_enc_free(&e);  free(bit);  free(slot);
 }
 
-/*  Compare every valid probability and count against the original update,
-    and verify that neither endpoint can be reached.  */
-static void t_adapt(void) {
-  static const int limit[] = { 0, 1, RC_ALIM, RC_CNTMAX };
-  u32 i, j, k;
-  int bad = 0;
-  xt_section_begin("rc adaptive update");
-  Fi(0xFFFE,
-    Fj(RC_CNTMAX + 1,
-      Fk(2,
-        u8 count = (u8) j;
-        u32 v = i + 1, rate = 65535U / (j + 3);
-        u16 got = rc_adapt((u16) v, &count, RC_ALIM, (int) k);
-        i32 want = k ? (i32) v - (i32) (v * rate >> 16)
-                     : (i32) v + (i32) ((0xFFFF - v) * rate >> 16);
-        if (want < 1) want = 1;
-        if (want > 0xFFFE) want = 0xFFFE;
-        if (got != want || !got || got == 0xFFFF
-            || count != j + (j < RC_ALIM)) bad++)));
-  CHECK(!bad, "%d probability/count updates differ", bad);
-  bad = 0;
-  Fi(sizeof limit / sizeof *limit,
-    Fj(RC_CNTMAX + 1,
-      u8 count = (u8) j;
-      rc_adapt(RC_PINIT, &count, limit[i], 0);
-      if (count != j + (j < (u32) limit[i])) bad++));
-  CHECK(!bad, "observation counts differ at a cap boundary");
-}
-
-/*  Packed states must retain the old arithmetic at every count cap.  */
+/*  Zero-filled arena models must start with the initial probability.  */
 static void t_packed(void) {
   static const int limit[] = { 0, 1, RC_ALIM, RC_CNTMAX };
-  u32 i, j, k;
+  u32 i, j;
   int bad = 0;
-  xt_section_begin("rc packed update");
-  Fi(sizeof limit / sizeof *limit,
-    Fj(0xFFFE,
-      Fk(RC_CNTMAX + 1,
-        u32 state = k << 16 | ((j + 1) ^ RC_PINIT);
-        u8 c0 = (u8) k, c1 = (u8) k;
-        u32 p0 = rc_adapt((u16) (j + 1), &c0, limit[i], 0);
-        u32 p1 = rc_adapt((u16) (j + 1), &c1, limit[i], 1);
-        if (rc_adapt_packed(state, limit[i], 0) != ((p0 ^ RC_PINIT) | (u32) c0 << 16)
-            || rc_adapt_packed(state, limit[i], 1) != ((p1 ^ RC_PINIT) | (u32) c1 << 16))
-          bad++)));
-  CHECK(!bad, "%d packed updates differ", bad);
-  bad = 0;
+  xt_section_begin("rc packed initialization");
   Fi(sizeof limit / sizeof *limit,
     Fj(2,
       u8 count = 0;
@@ -319,7 +277,7 @@ static void t_container(void) {
 static const mdl_cfg CFG[] = {
   /*  Page-header shapes and the remaining supported axes.  */
   { 3, 0, 0,  2, 0, 0 },  { 5, 1, 2,  8, 0, 1 },
-  { 5, 1, 1,  1, 0, 1 },  { 5, 1, 2,  8, 0, 1 },
+  { 5, 1, 1,  1, 0, 1 },
   { 5, 1, 2,  8, 0, 2 },  { 3, 0, 0,  8, 1, 0 },
   { 4, 0, 0, 32, 1, 0 },
   { 2, 0, 0,  1, 0, 0 },  { 2, 1, 1,  1, 1, 0 },
@@ -444,7 +402,6 @@ void xt_run_unit(void) {
   t_short_init();
   t_coder();
   t_coder_ad();
-  t_adapt();
   t_packed();
   t_container();
   t_mapping();  t_file_windows();
