@@ -84,6 +84,7 @@ typedef struct {
   i32 * nd;                   /*  decode tree: two children per node, a
                                   negative child is -(entry + 1)  */
   u32 nv;                     /*  multiplicands, i.e. digits per dimension  */
+  u32 divmul, divshift;        /*  exact division of 24-bit entry indices  */
   u32 * mult;                 /*  the multiplicand VALUES  */
   u32 base, off;              /*  max multiplicand + 1, and half of it  */
   /*  Multiplicand value to mult[] index, `base` entries wide.  */

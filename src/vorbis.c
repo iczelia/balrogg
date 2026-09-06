@@ -406,6 +406,10 @@ static void bk_tree(vb_book * b) {
     values and use `inv` to recover each index before recomposition.  */
 static void bk_look(vb_book * b) {
   u32 i, mx = 0, np;
+  /*  For t < 2^24, rounding this reciprocal up adds less than 1/nv to
+      t/nv. The integer quotient is exact, including nv == 1.  */
+  b->divshift = 24 + blr_ilog(b->nv - 1);
+  b->divmul = (u32) ((((uint64_t) 1 << b->divshift) + b->nv - 1) / b->nv);
   Fi(b->nv, if (b->mult[i] > mx) mx = b->mult[i]);
   b->base = mx + 1;  b->off = b->base >> 1;
   b->inv = xmalloc(b->base * sizeof *b->inv);
@@ -1280,7 +1284,7 @@ static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
   n->sh[ch] = (u8) ((sg + n->sh[ch] * 2) & 3);
   if (t) { n->mh[ch] = 1;  *mw = (u8) ((sg << 7) + 1);  mag = 1; }
   else {
-    if (z->enc) { a = mag;  while (a >>= 1) nb++;  nb--; }
+    if (z->enc) nb = blr_ilog(mag) - 2;
     FATAL_IF_HOT(z->enc && !(mag >= 2 && nb < AR_MAGB))
       ("vorbis: residue digit %ld exceeds 8 bits", (long) v);
     ax = q * AR_MCLS + n->mh[0];                /*  A_RLEN  */
@@ -1327,11 +1331,14 @@ static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
   i32 d;
   if (z->enc) { e = bk_get(z, b);  t = e; }
   if (z->probe) return;
-  if (il) { c = g / il;  ch = g % il; } else { c = g;  ch = 0; }
+  if (il == 2) { c = g >> 1;  ch = g & 1; }
+  else if (il > 2) { c = g / il;  ch = g % il; }
+  else { c = g;  ch = 0; }
   Fk(b->dim,
     u32 chc = ch > 3 ? 3 : ch;
     if (z->enc) {
-      d = (i32) b->mult[t % b->nv] - (i32) b->off;  t /= b->nv;
+      u32 next = (u32) ((uint64_t) t * b->divmul >> b->divshift);
+      d = (i32) b->mult[t - next * b->nv] - (i32) b->off;  t = next;
       rs_val(z, b, q, pass, c, chc, d);
     } else {
       u32 p;
