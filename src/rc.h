@@ -171,13 +171,48 @@ static INLINE int rc_dec_bit(rc_dec * d, u16 * p) {
   return bit;
 }
 
+static INLINE u16 rc_adapt_prob(u32 v, u32 rate, int bit) {
+  return (u16) (bit ? v - (v * rate >> 16)
+                    : v + ((0xFFFF - v) * rate >> 16));
+}
+
 static INLINE u16 rc_adapt(u16 v, u8 * c, int lim, int bit) {
-  u32 count = *c, d = rc_divt[count];
-  i32 nv;
+  u32 count = *c, rate = rc_divt[count];
   if ((int) count < lim) *c = (u8) (count + 1);
-  nv = bit ? (i32) v - (i32) ((u32) v * d >> 16)
-           : (i32) v + (i32) ((u32) (0xFFFF - v) * d >> 16);
-  return (u16) nv;
+  return rc_adapt_prob(v, rate, bit);
+}
+
+/*  An arena model packs P(0) xor RC_PINIT in the low word and its count in
+    the high word. Zero-filled models have the initial probability.  */
+static INLINE u32 rc_packed_prob(u32 state) {
+  return (state & 0xFFFF) ^ RC_PINIT;
+}
+
+static INLINE u32 rc_adapt_packed(u32 state, int lim, int bit) {
+  u32 count = state >> 16, rate = rc_divt[count];
+  u32 p = rc_adapt_prob(rc_packed_prob(state), rate, bit);
+  return (p ^ RC_PINIT) | (count + ((int) count < lim)) << 16;
+}
+
+static INLINE void rc_enc_bit_packed(rc_enc * e, u32 * p, int lim, int bit) {
+  u32 state = *p, v = rc_packed_prob(state), split = (e->range >> 16) * v;
+  REPORT(v, bit);
+  if (bit) { rc_addlow(e, split);  e->range -= split; }
+  else e->range = split;
+  *p = rc_adapt_packed(state, lim, bit);
+  rc_norm(e);
+}
+
+static INLINE int rc_dec_bit_packed(rc_dec * d, u32 * p, int lim) {
+  u32 state = *p, v = rc_packed_prob(state), split;
+  int bit;
+  rc_dec_norm(d);
+  split = (d->range >> 16) * v;
+  if (d->code < split) { d->range = split;  bit = 0; }
+  else { d->code -= split;  d->range -= split;  bit = 1; }
+  *p = rc_adapt_packed(state, lim, bit);
+  REPORT(v, bit);
+  return bit;
 }
 
 static INLINE void rc_enc_bit_ad(rc_enc * e, u16 * p, u8 * c, int lim, int bit) {

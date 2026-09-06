@@ -248,6 +248,32 @@ static void t_adapt(void) {
   CHECK(!bad, "observation counts differ at a cap boundary");
 }
 
+/*  Packed states must retain the old arithmetic at every count cap.  */
+static void t_packed(void) {
+  static const int limit[] = { 0, 1, RC_ALIM, RC_CNTMAX };
+  u32 i, j, k;
+  int bad = 0;
+  xt_section_begin("rc packed update");
+  Fi(sizeof limit / sizeof *limit,
+    Fj(0xFFFE,
+      Fk(RC_CNTMAX + 1,
+        u32 state = k << 16 | ((j + 1) ^ RC_PINIT);
+        u8 c0 = (u8) k, c1 = (u8) k;
+        u32 p0 = rc_adapt((u16) (j + 1), &c0, limit[i], 0);
+        u32 p1 = rc_adapt((u16) (j + 1), &c1, limit[i], 1);
+        if (rc_adapt_packed(state, limit[i], 0) != ((p0 ^ RC_PINIT) | (u32) c0 << 16)
+            || rc_adapt_packed(state, limit[i], 1) != ((p1 ^ RC_PINIT) | (u32) c1 << 16))
+          bad++)));
+  CHECK(!bad, "%d packed updates differ", bad);
+  bad = 0;
+  Fi(sizeof limit / sizeof *limit,
+    Fj(2,
+      u8 count = 0;
+      u32 p = rc_adapt(RC_PINIT, &count, limit[i], (int) j);
+      if (rc_adapt_packed(0, limit[i], (int) j) != ((p ^ RC_PINIT) | (u32) count << 16)) bad++));
+  CHECK(!bad, "%d lazy initializations differ", bad);
+}
+
 static void t_container(void) {
   archive a, b2;
   u8 * img, * blob;
@@ -371,8 +397,7 @@ static void t_kernels(void) {
   cm a, b;
   rc_enc ea, eb;
   xt_rng r;
-  u16 pa[64], pb[64];
-  u8 ca[64], cb[64];
+  u32 pa[64], pb[64];
   sz la, lb;
   int i, same = 1;
   xt_section_begin("mixer kernels");
@@ -384,8 +409,7 @@ static void t_kernels(void) {
   cm_new(&a, 3, 12, 8, 7, 255);  cm_new(&b, 3, 12, 8, 7, 255);
   rc_enc_init(&ea);  rc_enc_init(&eb);
   cm_bind(&a, &ea, NULL);  cm_bind(&b, &eb, NULL);
-  rc_probs_init(pa, 64);  rc_probs_init(pb, 64);
-  memset(ca, 0, sizeof ca);  memset(cb, 0, sizeof cb);
+  memset(pa, 0, sizeof pa);  memset(pb, 0, sizeof pb);
   xt_seed(&r, 3);
   Fi(200000,
     int st = (int) xt_next(&r, 3), sel = (int) xt_next(&r, 8);
@@ -394,8 +418,8 @@ static void t_kernels(void) {
     int bit = (int) ((xt_next(&r, 100) < 80) ^ (h & 1));
     i32 v = (i32) xt_next(&r, 40) - 20;
     cm_match_push(&a, v);  cm_match_push(&b, v);
-    cm_bit_scalar(&a, st, sel, h, pa + k, ca + k, exp, bit);
-    cm_bit_sse2(&b, st, sel, h, pb + k, cb + k, exp, bit));
+    cm_bit_scalar(&a, st, sel, h, pa + k, exp, bit);
+    cm_bit_sse2(&b, st, sel, h, pb + k, exp, bit));
   la = rc_enc_finish(&ea);  lb = rc_enc_finish(&eb);
   CHECK(la == lb && !memcmp(rc_enc_data(&ea), rc_enc_data(&eb), la),
         "kernel output differs (%lu, %lu bytes)",
@@ -405,7 +429,7 @@ static void t_kernels(void) {
     if (memcmp(a.st[i].sm, b.st[i].sm, 256 * sizeof(u32))) same = 0;
     if (memcmp(a.st[i].hist, b.st[i].hist, (sz) 1 << 12)) same = 0);
   CHECK(same, "kernel state differs");
-  CHECK(!memcmp(pa, pb, sizeof pa) && !memcmp(ca, cb, sizeof ca),
+  CHECK(!memcmp(pa, pb, sizeof pa),
         "kernel probabilities differ");
   xt_trace("kernels agree over 200000 bits, %lu coded bytes", (unsigned long) la);
   rc_enc_free(&ea);  rc_enc_free(&eb);
@@ -421,6 +445,7 @@ void xt_run_unit(void) {
   t_coder();
   t_coder_ad();
   t_adapt();
+  t_packed();
   t_container();
   t_mapping();  t_file_windows();
   blr_no_mmap = 1;

@@ -880,17 +880,11 @@ static INLINE u32 atab(const vb_ctx * v, int t, u32 idx) {
   return v->ab[t] + idx;
 }
 
-/*  Zero arena entries lazily expand to RC_PINIT.  */
-#define AR_LIVE(p)  do { if (!*(p)) *(p) = RC_PINIT; } while (0)
-
-/*  Code one arena bit and update its parallel observation count.  */
+/*  Code one arena bit and update its packed observation count.  */
 static INLINE int abit(io * z, u32 at, int lim, int b) {
-  vb_apage * page = z->v->ar + (at >> VB_APBITS);
-  u32 off = at & (VB_APSIZE - 1);
-  u16 * p = page->p + off;
-  AR_LIVE(p);
-  if (!z->enc) return rc_dec_bit_ad(z->d[S_BULK], p, page->c + off, lim);
-  rc_enc_bit_ad(z->e[S_BULK], p, page->c + off, lim, b);
+  u32 * p = z->v->ar + at;
+  if (!z->enc) return rc_dec_bit_packed(z->d[S_BULK], p, lim);
+  rc_enc_bit_packed(z->e[S_BULK], p, lim, b);
   return b;
 }
 
@@ -903,23 +897,17 @@ static void arena(vb_ctx * v) {
   for (at = 0, i = A_NGLOB; i < A_NTAB; i++) { v->ab[i] = at;  at += AR_SIZE[i]; }
   v->astep = at;
   v->arn = (sz) v->aglob + (sz) v->ns * v->astep;
-  bm_alloc(&v->arena, (v->arn + VB_APSIZE - 1) / VB_APSIZE * sizeof *v->ar);
-  v->ar = (vb_apage *) v->arena.p;
+  bm_alloc(&v->arena, v->arn * sizeof *v->ar);
+  v->ar = (u32 *) v->arena.p;
   memset(v->ai, 0, sizeof v->ai);
   memset(v->ad, 0, sizeof v->ad);
   v->mem = xcalloc(VB_MEMSZ, 1);
   v->clsm = xcalloc(VB_CLSMSZ, 1);
 }
 
-/*  Slot boundaries can share a page; clear only the requested model range.  */
+/*  Preserve neighboring slots when reusing a model range.  */
 static void ar_clear(vb_ctx * v, sz at, sz n) {
-  while (n) {
-    sz off = at & (VB_APSIZE - 1), take = MIN(n, VB_APSIZE - off);
-    vb_apage * p = v->ar + (at >> VB_APBITS);
-    memset(p->p + off, 0, take * sizeof *p->p);
-    memset(p->c + off, 0, take);
-    at += take;  n -= take;
-  }
+  memset(v->ar + at, 0, n * sizeof *v->ar);
 }
 
 /*  pool_slot bounds k. Seed once per partition, outside the digit loop.  */
@@ -1130,26 +1118,8 @@ static void cm_step(vb_ctx * v, u32 ch, u32 c, i32 val) {
 static INLINE int pbit(io * z, u32 off, int st, int sel, u32 h, int exp,
                        int b) {
   vb_ctx * v = z->v;
-  vb_apage * page = v->ar + (off >> VB_APBITS);
-  u32 at = off & (VB_APSIZE - 1);
-  u16 * p = page->p + at;
-  AR_LIVE(p);
-  return cm_bit(&v->cm, st, sel, h, p, page->c + at, exp, b);
+  return cm_bit(&v->cm, st, sel, h, v->ar + off, exp, b);
 }
-
-/*  Route enabled stages through CM and others through the arena.  */
-#define RBIT(off_, st_, h_, bit_)                                             \
-  (h_##L ? pbit(z, (off_), (st_), psel, h_##0, mex, (bit_))                   \
-         : abit(z, (off_), lim, (bit_)))
-
-/*  Reuse the invariant half of the history key.  */
-#define PHASH(st_) cm_hst(phb, phx, (u32) (st_))
-
-/*  Reuse one key per enabled stage.  */
-#define PHASHES(v_, st_)                                                      \
-  u32 v_##0 = 0;                                                              \
-  int v_##L = (n->cm_mask >> (st_)) & 1;                                      \
-  if (v_##L) v_##0 = PHASH(st_)
 
 /*  Partition classes use a four-bit tree banked by partition index. The final
     bank covers larger indices. A tune flag adds the bucketed class from the
@@ -1176,183 +1146,32 @@ static u32 rs_cls(io * z, u32 q, u32 ch, u32 p, u32 v) {
   return idx - 16;
 }
 
-/*  Code a residue digit through five mixed-radix tables.  */
-static INLINE i32 rs_val(io * z, vb_book * b, u32 q, u32 pass, u32 c,
-                         u32 ch, u32 mb, i32 v) {
-  vb_ctx * n = z->v;
-  int lim = n->t.alim;
-  u32 o, ax, il, m, a, mag = 0, k, idx;
-  u32 la = n->fh[0], nb = 0;
-  u8 * mr, * mw;
-  int t, sg = 0;
-  int psel = 0, memf = 0;
-  u32 pslot = 0, phb = 0, phx = 0;
-  i32 pv = 0;                 /*  the match model's digit, while it holds  */
-  u32 pm = 0;
-  int mok = 0, mex = -1;
-#ifdef BLR_PROFILE
-  int e_sh = n->sh[ch], e_mh = n->mh[0];
-#endif
-  FATAL_IF_HOT(c >= AR_MAXIDX)
-    ("vorbis: residue index %lu out of range", (unsigned long) c);
-  mr = n->mem + ((q * AR_NPASS + (pass ? pass - 1 : 0)) * AR_MAXIDX + c)
-               * AR_NCH + ch;
-  mw = n->mem + ((q * AR_NPASS + pass) * AR_MAXIDX + c) * AR_NCH + ch;
-  m = *mr;
-  ax = q;                                       /*  A_RZERO  */
-  ax = ax * 2 + (n->psl == b->slot);
-  ax = ax * 2 + !(m & 7);
-  ax = ax * 2 + la;
-  ax = ax * AR_NBIN + c / 4;
-  o = mb + atab(n, A_RZERO, ax * AR_NCH + ch);
-  if (n->cm_mask) {
-    /*  Mixer neighborhood uses adjacent and cross-channel digits plus class.  */
-    int c1, cx;
-    if (n->nstarted && n->nidx[ch] + 1 == c) n->nrun[ch]++;
-    else n->nrun[ch] = 0;
-    c1 = n->nrun[ch] >= 1 ? mcls(n->nv0[ch]) : 0;
+/*  Specialize only the stage masks used by CM_LEVMASK.  */
+#define RS_CM 0
+#define RS_NAME(n) rs_plain_##n
+#include "residue.h"
 
-    /*  For interleaved residue, cx is the other channel at this bin.  */
-    cx = n->nstarted && (u32) n->npch != ch ? mcls(n->nxv) : 0;
-    memf = (int) ((m & 3) + 4 * (m >> 7));
-    psel = ((c1 * 5 + cx) * 2 + (int) (ch & 1)) * 4 + (int) (m & 3);
-    pslot = b->slot;
-    phb = cm_hpre(pslot, ch, c, (u32) memf);
-    phx = cm_hpx(pslot, ch, c, (u32) memf);
-    if (n->t.flags & VB_TF_MATCH) mok = cm_match(&n->cm, &pv);
-    if (mok) pm = (u32) (pv < 0 ? -pv : pv);
-  }
-  PROF(prof_site = P_RZERO);
-  /*  Each stage expects the predicted digit's bit until one disagrees.  */
-  mex = mok ? pv != 0 : -1;
-  { PHASHES(hh, 0);  t = RBIT(o, 0, hh, v != 0); }
-  if (t != (pv != 0)) mok = 0;
-  n->psl = b->slot;
-  if (!t) {
-    n->fh[ch] = 0;  n->mh[ch] = 0;  *mw = 0;
-    if (n->cm_mask && n->t.flags & VB_TF_MATCH) cm_match_push(&n->cm, 0);
-    PROF(prof_res((int) b->slot, (int) q, (int) pass, (int) ch, c, (int) m,
-                  (int) la, e_sh, e_mh, 0));
-    PROF(prof_site = P_VOTHER);
-    if (n->cm_mask) cm_step(n, ch, c, 0);
-    return 0;
-  }
-  il = blr_ilog(c);  n->fh[ch] = 1;
-  if (z->enc) mag = (u32) (v < 0 ? -v : v);
-  ax = q;                                       /*  A_RSIGN  */
-  ax = ax * 2 + (m != 0);
-  ax = ax * 2 + (m >> 7 & 1);
-  ax = ax * 2 + la;
-  ax = ax * AR_HIST2 + n->sh[ch];
-  ax = ax * AR_ILOG + il;
-  o = mb + atab(n, A_RSIGN, ax * AR_NCH + ch);
-  PROF(prof_site = P_RSIGN);
-  mex = mok ? pv < 0 : -1;
-  { PHASHES(hh, 1);  sg = RBIT(o, 1, hh, v < 0); }
-  if (sg != (pv < 0)) mok = 0;
-  ax = q;                                       /*  A_RONE  */
-  ax = ax * 2 + (m != 0);
-  ax = ax * AR_MCLS + n->mh[0];
-  ax = ax * 2 + (u32) sg;
-  ax = ax * AR_ILOG + il;
-  o = mb + atab(n, A_RONE, ax * AR_NCH + ch);
-  PROF(prof_site = P_RONE);
-  mex = mok ? pm == 1 : -1;
-  { PHASHES(hh, 2);  t = RBIT(o, 2, hh, mag == 1); }
-  if (t != (pm == 1)) mok = 0;
-  n->sh[ch] = (u8) ((sg + n->sh[ch] * 2) & 3);
-  if (t) { n->mh[ch] = 1;  *mw = (u8) ((sg << 7) + 1);  mag = 1; }
-  else { u32 pnb = mok ? blr_ilog(pm) - 2 : 0;
-    if (z->enc) nb = blr_ilog(mag) - 2;
-    FATAL_IF_HOT(z->enc && !(mag >= 2 && nb < AR_MAGB))
-      ("vorbis: residue digit %ld exceeds 8 bits", (long) v);
-    ax = q * AR_MCLS + n->mh[0];                /*  A_RLEN  */
-    o = mb + atab(n, A_RLEN, (ax * AR_NCH + ch) * 8);
-    PROF(prof_site = P_RLEN);
-    idx = 1;
-    { PHASHES(h3, 3);
-      for (k = 3; k > 0; k--) {
-        mex = mok ? (int) (pnb >> (k - 1) & 1) : -1;
-        t = RBIT(o + idx, 3, h3, (int) (nb >> (k - 1) & 1));
-        if (t != mex) mok = 0;
-        idx = idx * 2 + (u32) t;
-      } }
-    nb = idx - 8;
-    ax = q * AR_MAGB + nb;                      /*  A_RMANT  */
-    ax = ax * AR_MCLS + n->mh[0];
-    o = mb + atab(n, A_RMANT, (ax * AR_NCH + ch) * AR_LOW2);
-    PROF(prof_site = P_RMANT);
-    a = 1;
-    { PHASHES(h4, 4);
-      for (k = nb + 1; k > 0; k--) {
-        mex = mok ? (int) (pm >> (k - 1) & 1) : -1;
-        t = RBIT(o + (a & 3), 4, h4, (int) (mag >> (k - 1) & 1));
-        if (t != mex) mok = 0;
-        a = a * 2 + (u32) t;
-      } }
-    mag = a;  n->mh[ch] = (u8) (nb + 2);  *mw = (u8) ((sg << 7) + 2 + nb);
-  }
-  { i32 rv = sg ? -(i32) mag : (i32) mag;
-    PROF(prof_res((int) b->slot, (int) q, (int) pass, (int) ch, c, (int) m,
-                  (int) la, e_sh, e_mh, rv));
-    PROF(prof_site = P_VOTHER);
-    if (n->cm_mask) {
-      cm_step(n, ch, c, rv);
-      if (n->t.flags & VB_TF_MATCH) cm_match_push(&n->cm, rv);
-    }
-    return rv; }
-}
+#define RS_CM 5
+#define RS_NAME(n) rs_zero_one_##n
+#include "residue.h"
 
-/*  Process one codebook symbol as base-`nv` digits.  */
-static INLINE void rs_sym(io * z, vb_book * b, u32 q, u32 pass, u32 g, u32 st,
-                          u32 il, u32 mb) {
-  u32 k, e = 0, np = 1, t = 0, c, ch;
-  i32 d;
-  if (z->enc) { e = bk_get(z, b);  t = e; }
-  if (z->probe) return;
-  if (il == 2) { c = g >> 1;  ch = g & 1; }
-  else if (il > 2) { c = g / il;  ch = g % il; }
-  else { c = g;  ch = 0; }
-  Fk(b->dim,
-    u32 chc = ch > 3 ? 3 : ch;
-    if (z->enc) {
-      u32 next = (u32) ((uint64_t) t * b->divmul >> b->divshift);
-      d = (i32) b->mult[t - next * b->nv] - (i32) b->off;  t = next;
-      rs_val(z, b, q, pass, c, chc, mb, d);
-    } else {
-      u32 p;
-      d = rs_val(z, b, q, pass, c, chc, mb, 0);
-      FATAL_IF_HOT(!(d + (i32) b->off >= 0 && d + (i32) b->off < (i32) b->base))
-        ("vorbis: residue digit %ld outside codebook grid", (long) d);
-      p = b->inv[(u32) (d + (i32) b->off)];
-      FATAL_IF_HOT(p == (u32) -1)
-        ("vorbis: residue digit %ld is not a codebook multiplicand", (long) d);
-      /*  Digit k weighs nv^k, the same decomposition the encoder took the
-          entry apart with.  */
-      e += p * np;  np *= b->nv;
-    }
-    if (il) { ch += st;  while (ch >= il) { ch -= il;  c++; } }
-    else c += st);
-  if (!z->enc) {
-    FATAL_IF_HOT(e >= b->ent)("vorbis: residue has no codebook entry");
-    bk_put(z, b, e);
-  }
-}
+#define RS_CM 29
+#define RS_NAME(n) rs_no_sign_##n
+#include "residue.h"
 
-/*  Process one partition with inlined symbol and digit operations.  */
-static HOT FLATTEN void rs_part(io * z, vb_res * r, vb_book * b, u32 q,
-                                u32 pass, u32 g, u32 il) {
-  u32 i, st, mb = z->probe ? 0 : ar_slot(z->v, b->slot);
-  if (r->type == 0) {
-    st = r->psz / b->dim;
-    FATAL_IF_HOT(st * b->dim != r->psz)
-      ("vorbis: residue 0 partition %lu not divisible by %lu",
-       (unsigned long) r->psz, (unsigned long) b->dim);
-    Fi(st, rs_sym(z, b, q, pass, g + i, st, il, mb);
-           if (z->rawpkt) return);
-  } else
-    for (i = 0; i < r->psz && !z->rawpkt; i += b->dim)
-      rs_sym(z, b, q, pass, g + i, 1, il, mb);
+#define RS_CM 31
+#define RS_NAME(n) rs_mixed_##n
+#include "residue.h"
+
+static void rs_part(io * z, vb_res * r, vb_book * b, u32 q, u32 pass, u32 g,
+                    u32 il) {
+  switch (z->v->cm_mask) {
+  case 0: rs_plain_part(z, r, b, q, pass, g, il);  break;
+  case 5: rs_zero_one_part(z, r, b, q, pass, g, il);  break;
+  case 29: rs_no_sign_part(z, r, b, q, pass, g, il);  break;
+  case 31: rs_mixed_part(z, r, b, q, pass, g, il);  break;
+  default: FATAL("vorbis: unsupported residue stage mask");
+  }
 }
 
 /*  Process compacted residue types 0 and 1 or interleaved type 2.  */

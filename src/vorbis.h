@@ -197,10 +197,6 @@ extern const u8 CM_LEVMASK[CM_NLEV];
 /*  Previous Floor 1 length per post, shared across channels.  */
 #define VB_FPLSZ   ((sz) VB_MAXFLOOR * VB_MAXPOST)
 
-#define VB_APBITS 12
-#define VB_APSIZE (1U << VB_APBITS)
-typedef struct { u16 p[VB_APSIZE];  u8 c[VB_APSIZE]; } vb_apage;
-
 typedef struct {
   model m[M_N];
   u16 f[F_NSLOT];
@@ -221,7 +217,7 @@ typedef struct {
   vb_slot sl[VB_MAXSLOT];  u32 nsl, ns;
   u8 st[VB_MAXSLOT];          /*  which slots this link has touched  */
 
-  vb_apage * ar;  sz arn;     /*  contiguous, demand-zero model pages  */
+  u32 * ar;  sz arn;          /*  packed probability/count arena  */
   blr_map arena;
   u32 ab[A_NTAB];             /*  each table's base within the arena  */
   u32 aglob, astep;           /*  the shared tables' span, and one slot's  */

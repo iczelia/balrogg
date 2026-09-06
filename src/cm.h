@@ -55,15 +55,17 @@ void cm_free(cm * c);
 
 static INLINE void cm_bind(cm * c, rc_enc * e, rc_dec * d) { c->e = e;  c->d = d; }
 
-/*  Code one bit. `exp` is the match prediction or -1.  */
+/*  Code one bit using a packed arena model: low word P(0) xor RC_PINIT,
+    high word count. Zero means RC_PINIT with no observations.
+    `exp` is the match bit or -1.  */
 typedef int (*cm_bit_fn)(cm * restrict c, int st, int sel, u32 h,
-                         u16 * restrict p, u8 * restrict cnt, int exp, int bit);
+                         u32 * restrict p, int exp, int bit);
 extern cm_bit_fn cm_bit;
-HOT int cm_bit_scalar(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
-                      u8 * restrict cnt, int exp, int bit);
+HOT int cm_bit_scalar(cm * restrict c, int st, int sel, u32 h, u32 * restrict p,
+                      int exp, int bit);
 #if defined(HAVE_SSE2)
-HOT int cm_bit_sse2(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
-                    u8 * restrict cnt, int exp, int bit);
+HOT int cm_bit_sse2(cm * restrict c, int st, int sel, u32 h, u32 * restrict p,
+                    int exp, int bit);
 #endif
 
 /*  Tables shared by both kernels.  */

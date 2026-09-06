@@ -33,6 +33,7 @@ typedef size_t   sz;
 /*  Hot-path hints.  */
 #if defined(__GNUC__) && !defined(BLR_NO_ATTRS)
 #define INLINE      __inline__ __attribute__((__always_inline__))
+#define NOINLINE    __attribute__((__noinline__))
 #define HOT         __attribute__((__hot__))
 #define FLATTEN     __attribute__((__flatten__))
 #define NORETURN    __attribute__((__noreturn__))
@@ -41,6 +42,7 @@ typedef size_t   sz;
 #define BLR_PRINTF(f, a) __attribute__((__format__(__printf__, f, a)))
 #else
 #define INLINE
+#define NOINLINE
 #define HOT
 #define FLATTEN
 #define NORETURN

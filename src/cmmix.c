@@ -87,20 +87,21 @@ static INLINE void mix_train(mixin t, short * w, int e) {
 }
 #endif
 
-HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
-               u8 * restrict cnt, int exp, int bit) {
+HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u32 * restrict p,
+               int exp, int bit) {
   cm_stage * s = c->st + st;
   u8 * sp = s->hist + (h & c->hmask);
   int state = *sp;
   short * w = s->w + sel * CM_NI;
+  u32 model = *p, prob = rc_packed_prob(model);
   u32 x = s->sm[state], ps = x >> 16, pr, d;
   i32 nv;
   int mi = 0;
   mixin in;
   /*  The state map stays in 1..0xFFFE and cm_squash returns 16..65504, so
-      neither probability needs clamping.  The caller's `p` is P(0).  */
+      neither probability needs clamping. The decoded arena value is P(0).  */
   if (exp < 0)
-    in = mix_in6(cm_str16[65536u - *p], cm_str16[ps], 256,
+    in = mix_in6(cm_str16[65536u - prob], cm_str16[ps], 256,
                  cm_str16[ps] * cm_nexd[state], 0, 0);
   else {
     /*  Add learned match accuracy and capped match length, both signed by
@@ -108,7 +109,7 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
     u32 lb = c->mlen < CM_MLB ? c->mlen : CM_MLB - 1;
     int sg = exp ? 1 : -1;
     mi = st * CM_MLB + (int) lb;
-    in = mix_in6(cm_str16[65536u - *p], cm_str16[ps], 256,
+    in = mix_in6(cm_str16[65536u - prob], cm_str16[ps], 256,
                  cm_str16[ps] * cm_nexd[state],
                  sg * cm_str16[c->mp[mi]],
                  sg * (int) (c->mlen < 32 ? c->mlen : 32) * 64);
@@ -129,7 +130,7 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u16 * restrict p,
   if (nv > 0xFFFE) nv = 0xFFFE;
   s->sm[state] = (u32) nv << 16 | ((x & 0xFFFF) + ((int) (x & 0xFFFF) < c->lim));
   mix_train(in, w, ((bit << 12) - (int) (pr >> 4)) * c->lr);
-  *p = rc_adapt(*p, cnt, c->lim, bit);
+  *p = rc_adapt_packed(model, c->lim, bit);
   if (exp >= 0) c->mp[mi] = rc_adapt(c->mp[mi], c->mpc + mi, c->lim, bit == exp);
   if (!c->d) rc_enc_bit_raw(c->e, 65536u - pr, bit);
   return bit;

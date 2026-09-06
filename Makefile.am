@@ -24,7 +24,7 @@ bin_PROGRAMS = balrogg
 dist_man1_MANS = balrogg.1
 noinst_HEADERS = \
   src/common.h src/map.h src/file.h src/rc.h src/model.h src/cm.h src/archive.h src/ogg.h \
-  src/vorbis.h src/codec.h src/opusmode.h src/opusent.h src/prof.h \
+  src/vorbis.h src/residue.h src/codec.h src/opusmode.h src/opusent.h src/prof.h \
   src/cpu.h src/yarg.h src/win32.h \
   src/opus/opusdec.h src/opus/celt.h src/opus/silk.h src/opus/arch.h \
   src/opus/opus_types.h src/opus/opus_defines.h src/opus/os_support.h \
