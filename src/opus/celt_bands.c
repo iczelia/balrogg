@@ -388,7 +388,7 @@ void quant_all_bands(const CELTMode *m, int start, int end, int C,
       opus_int32 curr_balance;
 
       ctx.i = i;
-      orec_band = i; orec_LM = LM; orec_C = C;
+      orec_band = i; orec_LM = LM;
 
       N = M*eBands[i+1]-M*eBands[i];
       celt_assert(N > 0);

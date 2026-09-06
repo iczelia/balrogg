@@ -87,18 +87,6 @@ struct ec_ctx{
    int            error;
 };
 
-static OPUS_INLINE opus_uint32 ec_range_bytes(ec_ctx *_this){
-  return _this->offs;
-}
-
-static OPUS_INLINE unsigned char *ec_get_buffer(ec_ctx *_this){
-  return _this->buf;
-}
-
-static OPUS_INLINE int ec_get_error(ec_ctx *_this){
-  return _this->error;
-}
-
 /*  Return a conservative whole-bit usage count.  */
 static OPUS_INLINE int ec_tell(ec_ctx *_this){
   return _this->nbits_total-EC_ILOG(_this->rng);

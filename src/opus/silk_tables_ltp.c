@@ -49,30 +49,9 @@ static const opus_uint8 silk_LTP_gain_iCDF_2[32] = {
         24,     20,     16,     12,      9,      5,      2,      0
 };
 
-static const opus_uint8 silk_LTP_gain_BITS_Q5_0[8] = {
-        15,    131,    138,    138,    155,    155,    173,    173
-};
-
-static const opus_uint8 silk_LTP_gain_BITS_Q5_1[16] = {
-        69,     93,    115,    118,    131,    138,    141,    138,
-       150,    150,    155,    150,    155,    160,    166,    160
-};
-
-static const opus_uint8 silk_LTP_gain_BITS_Q5_2[32] = {
-       131,    128,    134,    141,    141,    141,    145,    145,
-       145,    150,    155,    155,    155,    155,    160,    160,
-       160,    160,    166,    166,    173,    173,    182,    192,
-       182,    192,    192,    192,    205,    192,    205,    224
-};
-
 const opus_uint8 * const silk_LTP_gain_iCDF_ptrs[NB_LTP_CBKS] = {
     silk_LTP_gain_iCDF_0,
     silk_LTP_gain_iCDF_1,
     silk_LTP_gain_iCDF_2
 };
 
-const opus_uint8 * const silk_LTP_gain_BITS_Q5_ptrs[NB_LTP_CBKS] = {
-    silk_LTP_gain_BITS_Q5_0,
-    silk_LTP_gain_BITS_Q5_1,
-    silk_LTP_gain_BITS_Q5_2
-};

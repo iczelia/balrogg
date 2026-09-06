@@ -27,16 +27,12 @@
 
 #if !defined(_entdec_H)
 # define _entdec_H (1)
-# include <limits.h>
 # include "entcode.h"
 
 /*  Initialize a decoder over _buf.  */
 void ec_dec_init(ec_dec *_this,unsigned char *_buf,opus_uint32 _storage);
 
-/*  Return the next cumulative frequency. Follow with ec_dec_update().  */
-unsigned ec_decode(ec_dec *_this,unsigned _ft);
-
-/*Equivalent to ec_decode() with _ft==1<<_bits.*/
+/*  Return a cumulative frequency with total 1<<_bits.  */
 unsigned ec_decode_bin(ec_dec *_this,unsigned _bits);
 
 /*  Advance through [_fl, _fh) of total frequency _ft.  */

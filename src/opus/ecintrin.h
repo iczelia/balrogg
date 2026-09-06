@@ -27,7 +27,6 @@
 
 /*Some common macros for potential platform-specific optimization.*/
 #include "opus_types.h"
-#include <math.h>
 #include <limits.h>
 #include "arch.h"
 #if !defined(_ecintrin_H)

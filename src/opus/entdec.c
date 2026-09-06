@@ -15,12 +15,9 @@
 /*  libopus entropy decoder with public operations routed through the model.
     OREC_OFF retains the upstream behavior.  */
 
-#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>
 
-#include "os_support.h"
 #include "arch.h"
 #include "entdec.h"
 #include "entenc.h"
@@ -245,7 +242,7 @@ void oe_begin(void) {
 /*  Clear file-level context so one file cannot affect the next.  */
 void oe_reset(void) {
   int i;
-  orec_band = orec_ch = orec_LM = orec_C = orec_intra = 0;
+  orec_band = orec_ch = orec_LM = orec_intra = 0;
   orec_pvqN = orec_pvqK = orec_ftb = 0;
   oe_begin();
   for (i = 0; i < OE_MAXCTX; i++) { free(oc[i].mbuf);  oc[i].mbuf = NULL;  oc[i].mcap = 0; }
@@ -290,7 +287,6 @@ void ec_dec_init(ec_dec * d, unsigned char * buf, opus_uint32 storage) {
 
 /*  Keep partial range steps raw. Their complete operations are hooked.  */
 
-unsigned ec_decode(ec_dec * d, unsigned ft) { return raw_decode(d, ft); }
 unsigned ec_decode_bin(ec_dec * d, unsigned bits) { return raw_decode_bin(d, bits); }
 void ec_dec_update(ec_dec * d, unsigned fl, unsigned fh, unsigned ft) {
   raw_dec_update(d, fl, fh, ft);

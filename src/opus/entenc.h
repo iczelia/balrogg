@@ -27,7 +27,6 @@
 
 #if !defined(_entenc_H)
 # define _entenc_H (1)
-# include <stddef.h>
 # include "entcode.h"
 
 /*  Initialize an encoder over _buf.  */
@@ -52,12 +51,6 @@ void ec_enc_uint(ec_enc *_this,opus_uint32 _fl,opus_uint32 _ft);
 
 /*  Encode 1 to 25 raw bits.  */
 void ec_enc_bits(ec_enc *_this,opus_uint32 _fl,unsigned _ftb);
-
-/*  Replace up to eight initial power-of-two-coded bits.  */
-void ec_enc_patch_initial_bits(ec_enc *_this,unsigned _val,unsigned _nbits);
-
-/*  Compact output to _size, which must fit all written data.  */
-void ec_enc_shrink(ec_enc *_this,opus_uint32 _size);
 
 /*  Flush the final symbols.  */
 void ec_enc_done(ec_enc *_this);

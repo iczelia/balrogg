@@ -31,7 +31,7 @@
 
 #include "celt.h"
 
-int orec_band, orec_ch, orec_LM, orec_C, orec_intra;
+int orec_band, orec_ch, orec_LM, orec_intra;
 int orec_pvqN, orec_pvqK, orec_ftb;
 
 static const unsigned char trim_icdf[11] = {126, 124, 119, 109, 87, 41, 19, 9, 4, 2, 0};
@@ -114,7 +114,7 @@ void celt_decoder_reset(CELTDecoder *st)
 
 int celt_decode_with_ec(CELTDecoder *st, const unsigned char *data, int len, int frame_size, ec_dec *dec)
 {
-   int i, N;
+   int i;
    int spread_decision;
    opus_int32 bits;
    ec_dec _dec;
@@ -142,11 +142,9 @@ int celt_decode_with_ec(CELTDecoder *st, const unsigned char *data, int len, int
    int silence;
    int C = st->stream_channels;
    const CELTMode *mode;
-   int nbEBands;
    const opus_int16 *eBands;
 
    mode = st->mode;
-   nbEBands = mode->nbEBands;
    eBands = mode->eBands;
    start = st->start;
    end = st->end;
@@ -160,8 +158,6 @@ int celt_decode_with_ec(CELTDecoder *st, const unsigned char *data, int len, int
 
    if (len<0 || len>1275)
       return OPUS_BAD_ARG;
-
-   N = M*mode->shortMdctSize;
 
    /* Nothing to parse: a lost frame.  Concealment read no symbols. */
    if (data == NULL || len<=1)
@@ -285,7 +281,6 @@ int celt_decode_with_ec(CELTDecoder *st, const unsigned char *data, int len, int
          len*8-ec_tell(dec), dec, C);
 
    st->rng = dec->rng;
-   (void) nbEBands; (void) N;
 
    if (ec_tell(dec) > 8*len)
       return OPUS_INTERNAL_ERROR;
@@ -295,7 +290,6 @@ int celt_decode_with_ec(CELTDecoder *st, const unsigned char *data, int len, int
 #ifdef BLR_OPUS_TRANSITION
 /*  Compatibility shims used when comparing with upstream libopus.  */
 #include <stdarg.h>
-#include <string.h>
 struct OpusCustomMode;
 struct OpusCustomMode *opus_custom_mode_create(opus_int32 Fs, int frame_size, int *error);
 int celt_decoder_get_size(int channels);

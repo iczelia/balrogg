@@ -28,7 +28,6 @@
 /*  Opus packet and frame dispatch with audio processing removed.  */
 
 #include <stdlib.h>
-#include <string.h>
 #include "opusdec.h"
 #include "celt.h"
 #include "silk.h"
