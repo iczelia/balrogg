@@ -146,7 +146,7 @@ void cm_new(cm * c, int nst, int bits, int nsel, int lr, int lim) {
       p = (u32) (65535 * (n1 + 1) / (n0 + n1 + 2));
       if (p < 1) p = 1;
       if (p > 65534) p = 65534;
-      s->sm[k] = p << 16);
+      s->sm[k] = cm_sm(p, 0, k));
     /*  Align the weights to 16 bytes for SSE2 loads.  Start each set with
         weight 32767 (about 1.0) for the caller's prediction and zero for
         all other inputs.  */

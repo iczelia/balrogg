@@ -21,7 +21,7 @@
 
 typedef struct {
   u8 * hist;                  /*  one bit-history state per hashed context  */
-  u32 * sm;                   /*  state map: (P(1) << 16) | count  */
+  uint64_t * sm;              /*  low 32 bits: P(1), count; high 32: inputs  */
   short * w, * raw;           /*  nsel rows of eight weights, 16-byte aligned  */
 } cm_stage;
 
@@ -75,6 +75,12 @@ extern u8 cm_nex[256][4];
 extern i8 cm_nexd[256];
 extern const int cm_sqt[33];
 extern u16 cm_squash16[4096];
+
+static INLINE uint64_t cm_sm(u32 p, u32 count, int state) {
+  int b = cm_str16[p];
+  u32 bd = (u16) b | (u32) (u16) (b * cm_nexd[state]) << 16;
+  return (uint64_t) bd << 32 | p << 16 | count;
+}
 
 /*  Exact linear interpolation rearranged to use one multiplication.
       SQT[i]*16*(128 - w) + SQT[i+1]*16*w + 64

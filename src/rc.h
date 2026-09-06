@@ -171,6 +171,8 @@ static INLINE int rc_dec_bit(rc_dec * d, u16 * p) {
   return bit;
 }
 
+/*  For 1 <= v <= 0xFFFE and rate < 65536, both updates stay in that
+    interval: the subtracted fraction is strictly smaller than its input.  */
 static INLINE u16 rc_adapt_prob(u32 v, u32 rate, int bit) {
   return (u16) (bit ? v - (v * rate >> 16)
                     : v + ((0xFFFF - v) * rate >> 16));

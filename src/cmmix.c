@@ -27,12 +27,11 @@
 typedef __m128i mixin;
 
 /*  Pack the inputs before moving them into the vector.  */
-static INLINE mixin mix_in6(int a, int b, int c, int d, int e, int f) {
-  u32 ab = ((u32) a & 0xFFFFu) | ((u32) b << 16);
-  u32 cd = ((u32) c & 0xFFFFu) | ((u32) d << 16);
+static INLINE mixin mix_in6(int a, u32 bd, int e, int f) {
+  u32 ac = ((u32) a & 0xFFFFu) | 256u << 16;
   u32 ef = ((u32) e & 0xFFFFu) | ((u32) f << 16);
-  return _mm_unpacklo_epi64(_mm_unpacklo_epi32(_mm_cvtsi32_si128((int) ab),
-                                                 _mm_cvtsi32_si128((int) cd)),
+  return _mm_unpacklo_epi64(_mm_unpacklo_epi16(_mm_cvtsi32_si128((int) ac),
+                                                 _mm_cvtsi32_si128((int) bd)),
                             _mm_cvtsi32_si128((int) ef));
 }
 
@@ -59,10 +58,10 @@ static INLINE void mix_train(mixin t, short * w, int e) {
 
 typedef struct { short v[CM_NI]; } mixin;
 
-static INLINE mixin mix_in6(int a, int b, int c, int d, int e, int f) {
+static INLINE mixin mix_in6(int a, u32 bd, int e, int f) {
   mixin t;
-  t.v[0] = (short) a;  t.v[1] = (short) b;
-  t.v[2] = (short) c;  t.v[3] = (short) d;
+  t.v[0] = (short) a;  t.v[1] = (short) bd;
+  t.v[2] = 256;  t.v[3] = (short) (bd >> 16);
   t.v[4] = (short) e;  t.v[5] = (short) f;
   t.v[6] = 0;  t.v[7] = 0;
   return t;
@@ -94,23 +93,21 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u32 * restrict p,
   int state = *sp;
   short * w = s->w + sel * CM_NI;
   u32 model = *p, prob = rc_packed_prob(model);
-  u32 x = s->sm[state], ps = x >> 16, pr, d;
-  i32 nv;
+  uint64_t sm = s->sm[state];
+  u32 x = (u32) sm, ps = x >> 16, bd = (u32) (sm >> 32), pr, nv;
   int mi = 0;
   mixin in;
   /*  The state map stays in 1..0xFFFE and cm_squash returns 16..65504, so
       neither probability needs clamping. The decoded arena value is P(0).  */
   if (exp < 0)
-    in = mix_in6(cm_str16[65536u - prob], cm_str16[ps], 256,
-                 cm_str16[ps] * cm_nexd[state], 0, 0);
+    in = mix_in6(cm_str16[65536u - prob], bd, 0, 0);
   else {
     /*  Add learned match accuracy and capped match length, both signed by
         the expected bit.  */
     u32 lb = c->mlen < CM_MLB ? c->mlen : CM_MLB - 1;
     int sg = exp ? 1 : -1;
     mi = st * CM_MLB + (int) lb;
-    in = mix_in6(cm_str16[65536u - prob], cm_str16[ps], 256,
-                 cm_str16[ps] * cm_nexd[state],
+    in = mix_in6(cm_str16[65536u - prob], bd,
                  sg * cm_str16[c->mp[mi]],
                  sg * (int) (c->mlen < 32 ? c->mlen : 32) * 64);
   }
@@ -123,12 +120,8 @@ HOT int CM_BIT(cm * restrict c, int st, int sel, u32 h, u32 * restrict p,
   /*  Account for mixed bits because rc_*_bit_raw does not report them.  */
   PROF(prof_hook(NULL, 65536u - pr, bit));
   *sp = cm_nex[state][bit];
-  d = rc_divt[x & 0xFFFF];
-  nv = bit ? (i32) ps + (i32) ((0xFFFF - ps) * d >> 16)
-           : (i32) ps - (i32) (ps * d >> 16);
-  if (nv < 1) nv = 1;
-  if (nv > 0xFFFE) nv = 0xFFFE;
-  s->sm[state] = (u32) nv << 16 | ((x & 0xFFFF) + ((int) (x & 0xFFFF) < c->lim));
+  nv = rc_adapt_prob(ps, rc_divt[x & 0xFFFF], !bit);
+  s->sm[state] = cm_sm(nv, (x & 0xFFFF) + ((int) (x & 0xFFFF) < c->lim), state);
   mix_train(in, w, ((bit << 12) - (int) (pr >> 4)) * c->lr);
   *p = rc_adapt_packed(model, c->lim, bit);
   if (exp >= 0) c->mp[mi] = rc_adapt(c->mp[mi], c->mpc + mi, c->lim, bit == exp);

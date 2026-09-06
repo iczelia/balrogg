@@ -426,7 +426,7 @@ static void t_kernels(void) {
         (unsigned long) la, (unsigned long) lb);
   Fi(3,
     if (memcmp(a.st[i].w, b.st[i].w, 8 * CM_NI * sizeof(short))) same = 0;
-    if (memcmp(a.st[i].sm, b.st[i].sm, 256 * sizeof(u32))) same = 0;
+    if (memcmp(a.st[i].sm, b.st[i].sm, 256 * sizeof *a.st[i].sm)) same = 0;
     if (memcmp(a.st[i].hist, b.st[i].hist, (sz) 1 << 12)) same = 0);
   CHECK(same, "kernel state differs");
   CHECK(!memcmp(pa, pb, sizeof pa),
