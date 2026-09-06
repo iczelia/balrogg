@@ -32,7 +32,6 @@ typedef struct {
   blr_file * file;
   u8 * window;
   sz off, base, avail;
-  rc_hook hook;  void * hctx;
 } rc_dec;
 
 typedef struct {
@@ -43,7 +42,6 @@ typedef struct {
   u8 * buf;
   sz len, cap;
   blr_file * file;
-  rc_hook hook;  void * hctx;
 } rc_enc;
 
 void rc_dec_init(rc_dec * d, const u8 * buf, sz len);
@@ -74,21 +72,15 @@ void rc_probs_init(u16 * p, sz n);
 extern u16 rc_divt[RC_CNTMAX + 1];
 void rc_adapt_init(void);
 
-/*  Optional profiling hook called before each modeled slot update. A coder's
-    hook takes precedence over the global hook. Raw operations do not report.  */
+/*  Optional profiling hook for modeled slots. Raw operations do not report.  */
 void rc_hook_set(rc_hook h, void * ctx);
-void rc_enc_hook(rc_enc * e, rc_hook h, void * ctx);
-void rc_dec_hook(rc_dec * d, rc_hook h, void * ctx);
 
 /*  Per-bit operations.
     Header definitions allow inlining without LTO.  */
 extern rc_hook rc_hook_fn;
 extern void * rc_hook_ctx;
 
-/*  Exactly one hook fires per coded bit: the coder's own if it has one.  */
-#define REPORT(c, p, b)                                                       \
-  if ((c)->hook) (c)->hook((c)->hctx, (p), (b));                              \
-  else if (rc_hook_fn) rc_hook_fn(rc_hook_ctx, (p), (b))
+#define REPORT(p, b)  if (rc_hook_fn) rc_hook_fn(rc_hook_ctx, (p), (b))
 
 static INLINE void rc_put(rc_enc * e, u8 b) {
   if (e->file) {
@@ -154,7 +146,7 @@ static INLINE u16 rc_adapt_fixed(u16 v, int bit) {
 
 static INLINE void rc_enc_bit(rc_enc * e, u16 * p, int bit) {
   u32 v = *p, split = (e->range >> 16) * v;
-  REPORT(e, v, bit);
+  REPORT(v, bit);
   if (bit) {
     rc_addlow(e, split);  e->range -= split;
   } else {
@@ -175,7 +167,7 @@ static INLINE int rc_dec_bit(rc_dec * d, u16 * p) {
     d->code -= split;  d->range -= split;  bit = 1;
   }
   *p = rc_adapt_fixed((u16) v, bit);
-  REPORT(d, v, bit);
+  REPORT(v, bit);
   return bit;
 }
 
@@ -191,7 +183,7 @@ static INLINE u16 rc_adapt(u16 v, u8 * c, int lim, int bit) {
 
 static INLINE void rc_enc_bit_ad(rc_enc * e, u16 * p, u8 * c, int lim, int bit) {
   u32 v = *p, split = (e->range >> 16) * v;
-  REPORT(e, v, bit);
+  REPORT(v, bit);
   if (bit) { rc_addlow(e, split);  e->range -= split; }
   else e->range = split;
   *p = rc_adapt((u16) v, c, lim, bit);
@@ -206,7 +198,7 @@ static INLINE int rc_dec_bit_ad(rc_dec * d, u16 * p, u8 * c, int lim) {
   if (d->code < split) { d->range = split;  bit = 0; }
   else { d->code -= split;  d->range -= split;  bit = 1; }
   *p = rc_adapt((u16) v, c, lim, bit);
-  REPORT(d, v, bit);
+  REPORT(v, bit);
   return bit;
 }
 

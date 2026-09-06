@@ -18,7 +18,6 @@
 #define BLR_T_HARNESS_H
 
 #include "common.h"
-#include <stdarg.h>
 
 /*  Scale iteration counts with BLR_TEST_LEVEL.  */
 extern int xt_level;

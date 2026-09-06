@@ -18,7 +18,6 @@
 #include "model.h"
 #include "cm.h"
 
-#define VB_MAXBOOK  256           /*  a setup carries at most 256 codebooks  */
 #define VB_MAXCLASS 16            /*  floor 1 class numbers are 4 bits  */
 #define VB_MAXPART  32            /*  floor 1 partition count is 5 bits  */
 #define VB_MAXPOST  256           /*  at most 2 + 31*8 = 250 posts, rounded up  */
@@ -267,7 +266,6 @@ void vb_endlink(vb_ctx * v);
 void vb_reset(vb_ctx * v);
 /*  Select the zero-based setup used by repeated header pages.  */
 void vb_use(vb_ctx * v, u32 n);
-u32 vb_nsetup(const vb_ctx * v);
 
 /*  `which` selects identification, comment, or setup as 0, 1, or 2.  */
 void vb_hdr_enc(vb_ctx * v, rc_enc * e, int which, const u8 * pkt, sz len);

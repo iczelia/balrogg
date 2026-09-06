@@ -18,9 +18,6 @@ rc_hook rc_hook_fn;
 void * rc_hook_ctx;
 
 void rc_hook_set(rc_hook h, void * ctx) { rc_hook_fn = h;  rc_hook_ctx = ctx; }
-void rc_enc_hook(rc_enc * e, rc_hook h, void * ctx) { e->hook = h;  e->hctx = ctx; }
-void rc_dec_hook(rc_dec * d, rc_hook h, void * ctx) { d->hook = h;  d->hctx = ctx; }
-
 /*  Decoder.
     Seed from up to four bytes so short streams remain valid.  */
 
@@ -28,7 +25,7 @@ void rc_dec_init(rc_dec * d, const u8 * buf, sz len) {
   sz i, n = MIN(len, 4);
   d->in = buf;  d->len = len;  d->pos = n;
   d->file = NULL;  d->window = NULL;  d->off = d->base = 0;  d->avail = len;
-  d->code = 0;  d->range = 0xFFFFFFFFUL;  d->hook = NULL;  d->hctx = NULL;
+  d->code = 0;  d->range = 0xFFFFFFFFUL;
   Fi(n, d->code |= (u32) buf[i] << (24 - 8 * i));
 }
 
@@ -56,7 +53,7 @@ void rc_dec_free(rc_dec * d) { free(d->window);  d->window = NULL; }
 void rc_enc_init(rc_enc * e) {
   e->low = 0;  e->range = 0xFFFFFFFFUL;  e->carry = 0;
   /*  Begin with one owed zero byte, which finish strips.  */
-  e->cache = 0;  e->pending = 1;  e->hook = NULL;  e->hctx = NULL;
+  e->cache = 0;  e->pending = 1;
   e->cap = 1 << 12;  e->len = 0;  e->buf = xmalloc(e->cap);
   e->file = NULL;
 }

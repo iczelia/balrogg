@@ -156,8 +156,6 @@ void vb_free(vb_ctx * v) {
   v->ysn = v->csn = 0;
 }
 
-u32 vb_nsetup(const vb_ctx * v) { return v->nsu; }
-
 void vb_level(vb_ctx * v, int lev) {
   FATAL_UNLESS(lev >= 0 && lev < CM_NLEV, "vorbis: effort %d is out of range", lev);
   FATAL_UNLESS(!v->ar, "vorbis: the arena is already in use");
