@@ -60,7 +60,17 @@ balrogg_SOURCES += src/wincrt.c
 balrogg_CFLAGS += -fno-builtin -fno-tree-loop-distribute-patterns
 balrogg_LDFLAGS += -nostartfiles -nodefaultlibs -Wl,-e,$(BLR_WIN_ENTRY) \
                    -static -static-libgcc -Wl,--subsystem,console
-balrogg_LDADD += -lgcc -lkernel32
+balrogg_LDADD += balrogg-res.$(OBJEXT) -lgcc -lkernel32
+
+balrogg-res.$(OBJEXT): $(top_srcdir)/src/balrogg.rc $(top_srcdir)/src/balrogg.ico config.h
+	$(AM_V_GEN)$(WINDRES) -I$(top_builddir) -I$(top_srcdir)/src \
+	  -i $(top_srcdir)/src/balrogg.rc -O coff -o $@
+
+balrogg_prof-res.$(OBJEXT): $(top_srcdir)/src/balrogg.rc $(top_srcdir)/src/balrogg.ico config.h
+	$(AM_V_GEN)$(WINDRES) -I$(top_builddir) -I$(top_srcdir)/src -DBLR_PROFILE \
+	  -i $(top_srcdir)/src/balrogg.rc -O coff -o $@
+
+CLEANFILES = balrogg-res.$(OBJEXT) balrogg_prof-res.$(OBJEXT)
 endif
 
 ##  Ogg Opus model and bundled parser.
@@ -97,7 +107,7 @@ if BLR_IS_WINDOWS
 balrogg_prof_SOURCES += src/wincrt.c
 balrogg_prof_CFLAGS  += -fno-builtin -fno-tree-loop-distribute-patterns
 balrogg_prof_LDFLAGS  = $(balrogg_LDFLAGS)
-balrogg_prof_LDADD    = -lgcc -lkernel32
+balrogg_prof_LDADD    = balrogg_prof-res.$(OBJEXT) -lgcc -lkernel32
 else
 balrogg_prof_LDFLAGS  = $(AM_LDFLAGS)
 balrogg_prof_LDADD    = -lm
@@ -152,7 +162,7 @@ AM_TESTS_ENVIRONMENT = \
 BLR_TEST_BINARY = $(abs_top_builddir)/balrogg$(EXEEXT)
 
 EXTRA_DIST = \
-  bootstrap README.md \
+  bootstrap README.md src/balrogg.rc src/balrogg.ico \
   $(BLR_OPUS_SOURCES) src/opus/README src/opus/COPYING \
   tests/t_harness.h tests/data tests/regress \
   fuzz/harness.h fuzz/fuzz_dec.c fuzz/fuzz_enc.c \

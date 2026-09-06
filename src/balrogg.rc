@@ -1,0 +1,48 @@
+/*  Copyright (C) 2026 Kamila Szewczyk
+
+    This program is free software; you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, version 3.
+
+    This program is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with this program. If not, see <http://www.gnu.org/licenses/>.  */
+
+#include "config.h"
+#include <winver.h>
+
+1 ICON "balrogg.ico"
+
+#ifdef BLR_PROFILE
+#define BLR_NAME "balrogg_prof"
+#define BLR_DESCRIPTION "Ogg Vorbis and Opus recompressor with profiling"
+#else
+#define BLR_NAME "balrogg"
+#define BLR_DESCRIPTION "Lossless Ogg Vorbis and Opus recompressor"
+#endif
+
+1 VERSIONINFO
+FILEVERSION BLR_MAJOR, BLR_MINOR, 0, 0
+PRODUCTVERSION BLR_MAJOR, BLR_MINOR, 0, 0
+FILEFLAGSMASK VS_FFI_FILEFLAGSMASK
+FILEFLAGS 0
+FILEOS VOS__WINDOWS32
+FILETYPE VFT_APP
+FILESUBTYPE 0
+{ BLOCK "StringFileInfo"
+  { BLOCK "040904B0"
+    { VALUE "CompanyName", "Kamila Szewczyk\0"
+      VALUE "FileDescription", BLR_DESCRIPTION "\0"
+      VALUE "FileVersion", PACKAGE_VERSION "\0"
+      VALUE "InternalName", BLR_NAME "\0"
+      VALUE "LegalCopyright", "Copyright (C) 2022-2026 Kamila Szewczyk\0"
+      VALUE "OriginalFilename", BLR_NAME ".exe\0"
+      VALUE "ProductName", "balrogg\0"
+      VALUE "ProductVersion", PACKAGE_VERSION "\0"
+      VALUE "Comments", "Licensed under GNU GPLv3; https://github.com/iczelia/balrogg\0" } }
+  BLOCK "VarFileInfo"
+  { VALUE "Translation", 0x0409, 1200 } }

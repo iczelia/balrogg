@@ -82,6 +82,10 @@ esac
 AM_CONDITIONAL([BLR_IS_WINDOWS], [test "x$blr_is_windows" = "xyes"])
 if test "x$blr_is_windows" = "xyes"; then
   AC_DEFINE([BLR_WIN32], [1], [Define on Win32 hosts])
+  AC_CHECK_TOOL([WINDRES], [windres])
+  if test -z "$WINDRES"; then
+    AC_MSG_ERROR([windres is required for Windows resources])
+  fi
 fi
 
 AC_ARG_WITH([windows-target],
@@ -103,17 +107,12 @@ case "$blr_win_target" in
     AC_DEFINE([BLR_WIN_LEGACY], [1],
               [Define for the Windows 95 API and loader baseline])
     blr_win_cflags="-march=i486 -mtune=i486 -mfpmath=387"
-    dnl  GCC's PE backend has no per-object .bss sections: under
-    dnl  -fdata-sections every zero-initialised array becomes a .data$name
-    dnl  section with contents, and the image carries megabytes of zeros.
-    blr_win_cflags="$blr_win_cflags -ffunction-sections"
     blr_win_ldflags="-Wl,--major-subsystem-version=4"
     blr_win_ldflags="$blr_win_ldflags,--minor-subsystem-version=0"
     blr_win_ldflags="$blr_win_ldflags,--major-os-version=4"
     blr_win_ldflags="$blr_win_ldflags,--minor-os-version=0"
     blr_win_ldflags="$blr_win_ldflags,--disable-dynamicbase"
     blr_win_ldflags="$blr_win_ldflags,--disable-nxcompat"
-    blr_win_ldflags="$blr_win_ldflags,--gc-sections"
     ;;
   *)
     AC_MSG_ERROR([--with-windows-target must be "nt" or "win95"])
@@ -146,8 +145,10 @@ if test "x$blr_is_windows" = "xyes"; then
   esac
   AC_DEFINE([BLR_WIN_CRT], [1], [Use the freestanding native Windows runtime])
   BLR_WIN_CPPFLAGS="$blr_win_cppflags -D_CRTIMP= -D__USE_MINGW_ANSI_STDIO=1"
-  BLR_WIN_CFLAGS="$blr_win_cflags"
-  BLR_WIN_LDFLAGS="$blr_win_ldflags"
+  dnl  Keep zero-initialised arrays in .bss: -fdata-sections on PE would
+  dnl  put them in .data$name sections and store their zeros in the image.
+  BLR_WIN_CFLAGS="$blr_win_cflags -ffunction-sections"
+  BLR_WIN_LDFLAGS="$blr_win_ldflags -Wl,--gc-sections"
 elif test "x$with_windows_target" != "x"; then
   AC_MSG_ERROR([--with-windows-target is valid only for native Windows])
 else
