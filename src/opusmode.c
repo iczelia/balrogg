@@ -27,8 +27,6 @@ const char * opus_mode_version(void) { return OPUS_PARSER_VERSION; }
 
 /*  Adapt Opus probability tables as priors while preserving exact n-ary
     coding for uniform PVQ values.  */
-
-/*  Opus range coder and n-ary model.  */
 typedef rc_enc orc_enc;
 
 typedef struct {
@@ -73,7 +71,12 @@ static void orc_enc_cum(orc_enc * e, u32 fl, u32 fh, u32 ft) {
 }
 
 static void orc_enc_raw(orc_enc * e, u32 v, int nbits) {
-  if (nbits > 0) orc_enc_cum(e, v, v + 1, 1UL << nbits);
+  if (nbits > 0) {
+    u32 ft = 1UL << nbits, r = e->range >> nbits;
+    if (v > 0) orc_addlow(e, r * v);
+    e->range = v + 1 < ft ? r : e->range - r * v;
+    orc_norm(e);
+  }
 }
 
 static void orc_enc_done(orc_enc * e) { rc_enc_finish(e); }
@@ -116,10 +119,14 @@ static INLINE void orc_dec_cum_upd(orc_dec * d, u32 fl, u32 fh, u32 ft) {
 }
 
 static u32 orc_dec_raw(orc_dec * d, int nbits) {
-  u32 s;
+  u32 s, ft;
   if (nbits <= 0) return 0;
-  s = orc_dec_cum_get(d, 1UL << nbits);
-  orc_dec_cum_upd(d, s, s + 1, 1UL << nbits);
+  ft = 1UL << nbits;
+  orc_dnorm(d);
+  d->ext = d->range >> nbits;
+  s = d->code / d->ext;
+  if (s >= ft) s = ft - 1;
+  orc_dec_cum_upd(d, s, s + 1, ft);
   return s;
 }
 
@@ -152,14 +159,14 @@ static void p_raw(u32 * v, int nbits) {
 
 /*  Uniform value using Opus's 8-bit range-coded head and raw tail split.  */
 static void p_uniform(u32 * v, u32 V) {
-  u32 t, tt;
-  int ftb = 0;
+  u32 t;
+  int ftb;
   if (V <= 1) { *v = 0;  return; }
   PROF(prof_sym(om_comp, 0, 1, V));
   FATAL_IF_HOT(om_mode != OM_DEC && *v >= V)
     ("opus: uniform %lu out of range %lu", (unsigned long) *v, (unsigned long) V);
   t = V - 1;
-  for (tt = t; tt; tt >>= 1) ftb++;          /*  ftb = ILOG(V - 1)  */
+  ftb = (int) blr_ilog(t);
   if (ftb > 8) {
     u32 ft, hi, lo;
     ftb -= 8;
@@ -296,7 +303,7 @@ static mctx * ctx_find(okey key, const prior * pr) {
 
 /*  Code one symbol against prior + counts.  `inc` and `cap` are the learning rate
     and the halving point, chosen per symbol kind in KP below.  */
-static HOT void ctx_code(mctx * c, int inc, int cap, int * v) {
+static HOT FLATTEN void ctx_code(mctx * c, int inc, int cap, int * v) {
   int n = c->n, i, nb = CB_NBLK(n);
   u32 * blk = c->t, * f = blk + nb;
   u32 ft = c->pr->tot + c->tot, fl = 0, fh = 0;
