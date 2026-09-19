@@ -215,7 +215,7 @@ static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
   rc_enc_file(&eb, arc_newstream(s));
   if (!solid) { vb_reset(v);  ogg_hdr_free(h);  ogg_hdr_init(h); }
   vb_link(v);  ogg_hdr_reset(h);
-  if (l->hdup >= 0) vb_use(v, (u32) l->setup);
+  if (l->setup >= 0) vb_use(v, (u32) l->setup);
   for (i = l->a; i <= l->z; i++) {
     sz at = 0;
     ogg_page p;
@@ -259,7 +259,10 @@ static void enc_link(vb_ctx * v, ogg_hdr * h, archive * s, const pg_t * pg,
           vb_hdr_enc(v, &eb, w, pk, pl);
         }
         w++;
-      } else vb_aud_enc(v, &eb, &em, &et, pk, pl, p.type & 1));
+      } else {
+        FATAL_UNLESS(w == 3, "page %d has audio before the setup header", i);
+        vb_aud_enc(v, &eb, &em, &et, pk, pl, p.type & 1);
+      });
     ogg_hdr_step(h, samples(v, &p, pagebody, &carry));
     blr_progress_update(pg[i].off + pg[i].len);
   }
@@ -286,7 +289,7 @@ static archive pack_once(blr_file * input, const char * in,
   u16 cp[C_NPROB];
   archive a;
   sz at = 0, got;
-  int np = 0, cap = 64, nl = 0, lcap = 8, i, j, k, eos = 1, prev = 0, nset = 0;
+  int np = 0, cap = 64, nl = 0, lcap = 8, i, j, k, eos = 1, prev = 0;
   int nrec = 0, nkeep = 0, * recl, * keepl;
 
   pg = xmalloc((sz) cap * sizeof *pg);
@@ -310,10 +313,9 @@ static archive pack_once(blr_file * input, const char * in,
   FATAL_UNLESS(np > 0, "%s: not an Ogg bitstream", in);
   pg = xrealloc(pg, (sz) np * sizeof *pg);
 
-  /*  BOS starts a link only after EOS.  */
   lk = xmalloc((sz) lcap * sizeof *lk);
   Fk(np,
-    if (pg[k].type & 2 && eos) {
+    if (pg[k].type & 2) {
       if (nl == lcap) { lcap *= 2;  lk = xrealloc(lk, (sz) lcap * sizeof *lk); }
       lk[nl].a = lk[nl].z = (int) k;  lk[nl].serial = pg[k].serial;
       lk[nl].rep = lk[nl].hdup = -1;  lk[nl].rec = lk[nl].keep = 0;
@@ -346,11 +348,9 @@ static archive pack_once(blr_file * input, const char * in,
             samerun(input, xo, yo, xn)) {
           lk[i].hdup = j;  lk[j].keep = 1;  break;
         });
-    if (lk[i].hdup >= 0) {
-      lk[i].setup = lk[lk[i].hdup].setup;
+    if (lk[i].hdup >= 0)
       for (k = lk[i].a + 1; k <= lk[i].z && isheader(pg + k); k++)
-        pg[k].skip = 1;
-    } else lk[i].setup = nset++);
+        pg[k].skip = 1);
 
   arc_init(&a, o->flags);
   /*  Omit the tune blob when all values are default.  */
@@ -394,7 +394,10 @@ static archive pack_once(blr_file * input, const char * in,
       for (k = lk[i].a; k <= lk[i].z; k++) if (!pg[k].skip) pages++;
       for (k = 31; k >= 0; k--)
         rc_enc_bit_raw(&e0, 0x8000, (int) (pages >> k & 1)); }
-    enc_link(&v, &h, &a, pg, lk + i, ARC_SOLID(o->flags) || i == 0, input);
+    { u32 had = v.nsu;
+      lk[i].setup = lk[i].hdup >= 0 ? lk[lk[i].hdup].setup : -1;
+      enc_link(&v, &h, &a, pg, lk + i, ARC_SOLID(o->flags) || i == 0, input);
+      if (v.nsu > had) lk[i].setup = (int) v.nsu - 1; }
     if (lk[i].rec) recl[nrec++] = i;
     if (lk[i].keep) keepl[nkeep++] = i);
   rc_enc_bit(&e0, cp + C_CONT + prev, 0);
@@ -494,7 +497,7 @@ void vb_unpack(const char * in, const char * out) {
   blr_file * ob;
   run_t * rec, * keep;
   sz len, si = 1;
-  int prev = 0, nrec = 0, nkeep = 0, nset = 0, crec = 16, ckeep = 16;
+  int prev = 0, nrec = 0, nkeep = 0, crec = 16, ckeep = 16;
 
   len = input->len;
   arc_read(&a, input);
@@ -521,7 +524,7 @@ void vb_unpack(const char * in, const char * out) {
     u32 carry = 0;
     int isrec, isdup, iskeep = 0, w = 0, first = 1, done = 0, cur, r, k, cont = 0;
     int hpk = 0;                  /*  header packets the replayed pages hold  */
-    u32 ser = 0, pages = 0;
+    u32 ser = 0, pages = 0, had = v.nsu;
 
     /*  A spent control stream could otherwise replay forever.  */
     FATAL_UNLESS(!rc_dec_spent(&d0), "%s: the control stream ran out", in);
@@ -545,7 +548,7 @@ void vb_unpack(const char * in, const char * out) {
       cur = nkeep - 1 - (int) back;
       hoff = keep[cur].off;  hlen = keep[cur].len;  hpk = keep[cur].npk;
       cur = keep[cur].setup;
-    } else { iskeep = rc_dec_bit(&d0, cp + C_KEEP);  cur = nset++; }
+    } else { iskeep = rc_dec_bit(&d0, cp + C_KEEP);  cur = -1; }
 
     Fk(32, pages = pages << 1 | (u32) rc_dec_bit_raw(&d0, 0x8000));
     FATAL_UNLESS(pages, "%s: a link has no coded pages", in);
@@ -558,7 +561,7 @@ void vb_unpack(const char * in, const char * out) {
       vb_reset(&v);  ogg_hdr_free(&h);  ogg_hdr_init(&h);
     }
     vb_link(&v);  ogg_hdr_reset(&h);
-    if (isdup) vb_use(&v, (u32) cur);
+    if (cur >= 0) vb_use(&v, (u32) cur);
     mark = ob->len;
 
     while (!done) {
@@ -616,11 +619,10 @@ void vb_unpack(const char * in, const char * out) {
       done = !--pages;
       FATAL_UNLESS(!(q.type & 4) || done,
                    "%s: page count extends past end of stream", in);
-      FATAL_UNLESS(!done || q.type & 4 || si == a.n,
-                   "%s: a non-final link has no end-of-stream page", in);
     }
     FATAL_UNLESS(!cont, "%s: link ends in a continued packet", in);
     vb_endlink(&v);
+    if (v.nsu > had) cur = (int) v.nsu - 1;
     progress_base += dt.len + dm.len + db.len;
     bf_dropcache(dt.file);  bf_dropcache(dm.file);  bf_dropcache(db.file);
     rc_dec_free(&dt);  rc_dec_free(&dm);  rc_dec_free(&db);

@@ -159,11 +159,11 @@ Input and output must be seekable.
 .PP
 Opus mode supports mono and stereo logical streams with channel mapping
 family 0, with packets (including headers) up to 61,440 bytes.
-Chained Opus files are supported, and their links share the adaptive models.
-Vorbis floor type 0 and codebook lookup type 2 are unsupported.
+Chained Opus and Vorbis files are supported. Their links share the adaptive
+models. Vorbis floor type 0 and codebook lookup type 2 are unsupported.
 Pages with bad checksums are refused.
-Vorbis files without a final end-of-stream flag are supported when they end on
-a complete packet.
+A Vorbis link without an end-of-stream flag is supported when it ends on a
+complete packet, whether it is the last link or the next link follows it.
 .SH EXAMPLES
 .nf
 balrogg e track.ogg track.blr

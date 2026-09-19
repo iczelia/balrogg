@@ -531,6 +531,64 @@ static void t_constructed(void) {
   xt_unlink(log);  xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
 }
 
+static sz page_at(const u8 * b, sz n, int k) {
+  sz at = 0, got;
+  ogg_page p;
+  while (k-- > 0 && (got = ogg_parse(&p, b + at, n - at)) != 0) at += got;
+  return at;
+}
+
+static void t_cut_links(void) {
+  char args[8192];
+  const char * log = xt_tmp("cli.log"), * in = xt_tmp("cut.ogg");
+  const char * arc = xt_tmp("cut.blr"), * out = xt_tmp("cut.out");
+  const char * ref = xt_tmp("cutref.blr");
+  sz na, nb, a1, a2, a3, cut;
+  u8 * a = slurp(xt_fixture(xt_data, "lowbr.ogg"), &na);
+  u8 * b = slurp(xt_fixture(xt_data, "tiny.ogg"), &nb);
+  ogg_page p;
+  obuf o;
+  int i;
+  xt_section_begin("cli cut links");
+  a1 = page_at(a, na, 1);  a2 = page_at(a, na, 2);  a3 = page_at(a, na, 3);
+  cut = page_at(b, nb, 1);
+
+  Fi(3,
+    const char * dst = i < 2 ? arc : ref;
+    o.b = NULL;  o.n = o.cap = 0;
+    if (i < 2) ob_put(&o, b, cut);
+    ob_put(&o, a, na);
+    if (i) ob_put(&o, b, nb);
+    ob_put(&o, a, a3);
+    spew(in, o.b, o.n);
+    sprintf(args, "-4 e \"%s\" \"%s\"", in, dst);
+    CHECK(xt_run(args, log) == 0, "cut-link chain %d encodes", i);
+    sprintf(args, "d \"%s\" \"%s\"", dst, out);
+    CHECK(xt_run(args, log) == 0 && xt_same_file(in, out),
+          "cut-link chain %d round-trips", i);
+    free(o.b));
+  CHECK(xt_file_size(arc) <= xt_file_size(ref) + (long) cut,
+        "a cut link leaves later header references on their own setup");
+
+  o.b = NULL;  o.n = o.cap = 0;
+  ob_put(&o, a, na);
+  ob_put(&o, a, a1);
+  CHECK(ogg_parse(&p, a + a1, na - a1) == a2 - a1 && p.np == 2,
+        "lowbr.ogg carries its comment and setup on page 1");
+  { const u8 * body = a + a1 + OGG_HDRMIN + p.nseg;
+    p.np = 1;  ob_page(&o, &p, body); }
+  ob_put(&o, a + a2, a3 - a2);
+  spew(in, o.b, o.n);
+  sprintf(args, "e \"%s\" \"%s\"", in, arc);
+  CHECK(xt_run(args, log) == BLR_EXIT_REFUSED &&
+        xt_file_contains(log, "audio before the setup header"),
+        "audio before the setup header is refused");
+  free(o.b);
+  free(a);  free(b);
+  xt_unlink(log);  xt_unlink(in);  xt_unlink(arc);  xt_unlink(ref);
+  xt_unlink(out);
+}
+
 /*  Valid encoder choices outside the original model alphabets.  Long Vorbis
     runs check compression; changed Opus packets precede ordinary packets.  */
 static void t_codec_choices(void) {
@@ -645,6 +703,7 @@ void xt_run_cli(void) {
   t_batch();
   t_damaged();
   t_constructed();
+  t_cut_links();
   t_packet_edges();
   t_progress();
   t_archive_version();

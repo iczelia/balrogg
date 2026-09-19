@@ -55,7 +55,7 @@ static int isheader(const pinfo * q) {
 static int parse(const char * path, parsed * f) {
   u8 * key[MAXLINK];
   sz klen[MAXLINK], kset[MAXLINK], nset = 0, at = 0, got, kl, cap = 64;
-  int n = 0, i, j, k, nkey = 0, eos = 1;
+  int n = 0, i, j, k, nkey = 0;
   u8 * keybuf;
 
   f->buf = slurp(path, &f->len);
@@ -71,9 +71,7 @@ static int parse(const char * path, parsed * f) {
     at += got;  n++;
   }
   f->n = n;
-  Fi(n,
-    if (f->pg[i].p.type & 2 && eos) { f->pg[i].first = 1;  eos = 0; }
-    if (f->pg[i].p.type & 4) eos = 1);
+  Fi(n, if (f->pg[i].p.type & 2) f->pg[i].first = 1);
   if (!n || !f->pg[0].first) { CHECK(0, "%s: does not start a bitstream", path);  return 0; }
 
   for (i = 0; i < n; i = j) {

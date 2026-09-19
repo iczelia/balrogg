@@ -161,6 +161,16 @@ static void t_opus_chain(void) {
   xt_unlink(in);  xt_unlink(arc);  xt_unlink(arc2);  xt_unlink(out);
 }
 
+static void clear_eos(u8 * b, sz n, int every) {
+  sz at, got;
+  ogg_page p;
+  for (at = 0; at < n; at += got) {
+    got = ogg_parse(&p, b + at, n - at);
+    FATAL_UNLESS(got, "invalid no-EOS fixture");
+    if (every || at + got == n) { b[at + 5] &= (u8) ~4;  ogg_crc_set(b + at, got); }
+  }
+}
+
 /*  EOF may follow a complete packet without setting the final page's EOS
     flag.  Prefixing complete copies also exercises link and header replay.  */
 static void t_no_eos(void) {
@@ -169,39 +179,32 @@ static void t_no_eos(void) {
   };
   const char * in = xt_tmp("noeos.ogg"), * arc = xt_tmp("noeos.blr");
   const char * out = xt_tmp("noeos.out");
-  int i, copies, k;
-  xt_section_begin("Vorbis without final EOS");
+  int i, j, copies, k;
+  xt_section_begin("Vorbis without EOS");
   Fi(3,
-    sz n, at, got, last = 0;
+    sz n;
     u8 * b = slurp(xt_fixture(xt_data, names[i]), &n);
     u8 * joined = xmalloc(3 * n);
-    ogg_page p;
-    for (at = 0; at < n; at += got) {
-      got = ogg_parse(&p, b + at, n - at);
-      FATAL_UNLESS(got, "invalid no-EOS fixture");
-      last = at;
-    }
-    for (copies = 0; copies <= 2; copies += 2) {
-      sz tail = (sz) copies * n + last;
+    for (copies = 0; copies <= 2; copies += 2) Fj(2,
+      sz total = (sz) (copies + 1) * n;
       vb_opt o;
       archive a;
       u8 * image;
       sz len;
       Fk(copies + 1, memcpy(joined + (sz) k * n, b, n));
-      joined[tail + 5] &= (u8) ~4;
-      ogg_crc_set(joined + tail, n - last);
-      spew(in, joined, (sz) (copies + 1) * n);
+      clear_eos(joined, total, j);
+      spew(in, joined, total);
       level(&o, 1);
       if (copies) o.flags &= (u8) ~8;
       vb_pack(in, arc, &o);  vb_unpack(arc, out);
-      CHECK(xt_same_file(in, out), "%s without EOS, %d copies", names[i], copies);
+      CHECK(xt_same_file(in, out), "%s without %s EOS, %d copies", names[i],
+            j ? "any" : "a final", copies);
       image = slurp(arc, &len);
       arc_parse(&a, image, len);
       arc_write(&a, out);
       CHECK(xt_same_file(arc, out), "page-count archive write is exact");
       arc_free(&a);  free(image);
-      t_reemit(arc);
-    }
+      t_reemit(arc));
     free(joined);  free(b));
   xt_unlink(in);  xt_unlink(arc);  xt_unlink(out);
 }

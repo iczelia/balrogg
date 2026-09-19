@@ -67,18 +67,19 @@ candidate present during a trial.
 
 The encoder refuses files it cannot reproduce exactly, including files with
 bad checksums, invalid page sequences, or unsupported Vorbis features.
-Vorbis files missing the final end-of-stream flag are supported when they end
-on a complete packet.
+Chained Vorbis files share the adaptive models across links. A link missing its
+end-of-stream flag, such as a stream cut short before the next link begins, is
+supported when it ends on a complete packet.
 
 Vorbis packets with extra padding or alternative floor subclass choices retain
 normal floor and residue compression. Classword corrections and padding are
 modeled separately. Shortened packets (packet peeling) use an adaptive byte model.
 
-Opus support is limited to one mono or stereo logical stream with channel
-mapping family 0. Audio packets and OpusHead are limited to 61,440 bytes;
+Opus support is limited to mono or stereo logical streams with channel mapping
+family 0. Audio packets and OpusHead are limited to 61,440 bytes;
 extended frame headers and padding are supported within that limit. OpusTags
 packets may be up to 120 MiB and are processed in bounded batches.
-Chained and multichannel Opus files are refused. Refusals
+Multichannel Opus files are refused. Refusals
 produce a diagnostic and exit status 1.
 
 ## Exit status
