@@ -56,7 +56,7 @@ and automake.
 
 ## Effort
 
-`-1` through `-9` select effort; the default is `-9`. Through `-4`, each level
+`-1` through `-9` select effort; the default is `-4`. Through `-4`, each level
 adds a residue-model stage and affects decoding. Higher levels only expand the
 parameter search, so `-4` through `-9` decode at the same speed.
 Vorbis tuning evaluates the complete file at each selected setting. The best

@@ -61,7 +61,7 @@ static void usage(FILE * to) {
     "       balrogg pages IN                print an Ogg file's page framing\n"
     "       balrogg -h | -v\n"
     "\n"
-    "  -1 .. -9      effort; -9 is the default\n"
+    "  -1 .. -9      effort; -4 is the default\n"
     "  -b, --batch   process every remaining path\n"
     "  -j, --jobs=N  process N files at once\n"
     "  -p, --progress show tuning and codec progress on stderr\n"
@@ -542,7 +542,7 @@ int main(int argc, char ** argv) {
   yarg_result * r;
   const effort * e;
   char lev[3];
-  int i, level = 9, np, batch = 0, jobs = 0, rc = 0;
+  int i, level = 4, np, batch = 0, jobs = 0, rc = 0;
 
   set.dash_dash = true;
   set.style = YARG_STYLE_UNIX;
