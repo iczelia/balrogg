@@ -404,12 +404,15 @@ static u32 last_pvq[NB][8][8], last_pvqV[NB][8][8];
 static int have_pvq[NB][8][8];
 static u8 site_hist[OREC_S_COUNT];
 
+static void fh_reset(void);
+
 static void om_reset(void) {
   memset(prev_qi, 0, sizeof prev_qi);  memset(band_qi, 0, sizeof band_qi);
   memset(prev_theta, 0, sizeof prev_theta);  memset(prev_fine, 0, sizeof prev_fine);
   c0_qi = 0;  c0_qib = -1;  c0_fine = 0;  c0_fineb = -1;  c0_finen = -1;
   memset(have_pvq, 0, sizeof have_pvq);  memset(last_pvqV, 0, sizeof last_pvqV);
   memset(site_hist, 0, sizeof site_hist);
+  fh_reset();
 }
 
 static u32 * pvq_ut;            /*  the codeword-count table U(n, k), from pvq_ubuild  */
@@ -922,6 +925,8 @@ opus_int32 om_op(oprec * op) {
 #define K_FSLACK  ((okey) 0x1E000000UL << 32)
 #define K_FBYTE   ((okey) 0x1F000000UL << 32)
 #define K_LINK    ((okey) 0x20000000UL << 32)
+#define K_GAPCLS  ((okey) 0x21000000UL << 32)
+#define K_FHIT    ((okey) 0x22000000UL << 32)
 
 /*  RFC 7845 section 6 audio packet bound, also used for OpusHead scratch.  */
 #define OPUS_MAXPKT 61440
@@ -948,10 +953,42 @@ static void byte_ctx(okey base, int slot, int prev, int * v) {
   om_int(base | (okey) slot << 16 | (okey) (prev & 0xFF), 256, 192, 28, 16384, v);
 }
 
+/*  Encoders differ in what they leave between the range-coded bytes and the
+    raw bits.  libopus clears it, which the mirror reproduces.  FFmpeg's native
+    encoder reuses its output buffer, so the gap inherits the bytes of earlier
+    frames at the same offsets.  The stream's encoder class, taken from the
+    OpusTags vendor string, selects the priors; patched bytes are predicted
+    from the last FH_N frames before falling back to a literal.  */
+enum { GAP_LIBOPUS, GAP_LAVC, GAP_OTHER, GAP_NCLS };
+#define FH_N   4
+#define FH_CAP 1276              /*  the largest Opus frame, RFC 6716 3.4  */
+
+static int gap_cls;
+static u32 fh_lo, fh_span;      /*  the previous patch, for GAP_LAVC  */
+static void resid(okey base, opus_int64 * v);
+static u8 fh[FH_N][FH_CAP];
+static u32 fhn[FH_N];
+
+static void fh_reset(void) { memset(fhn, 0, sizeof fhn);  fh_lo = fh_span = 0; }
+
+static int gap_class(const u8 * vendor, sz n) {
+  if (n >= 7 && !memcmp(vendor, "libopus", 7)) return GAP_LIBOPUS;
+  if ((n >= 6 && !memcmp(vendor, "ffmpeg", 6))
+      || (n >= 4 && (!memcmp(vendor, "Lavf", 4) || !memcmp(vendor, "Lavc", 4)))) return GAP_LAVC;
+  return GAP_OTHER;
+}
+
+static void fh_push(const u8 * buf, u32 n) {
+  memmove(fh[1], fh[0], sizeof fh[0] * (FH_N - 1));
+  memmove(fhn + 1, fhn, sizeof fhn[0] * (FH_N - 1));
+  fhn[0] = MIN(n, FH_CAP);  memcpy(fh[0], buf, fhn[0]);
+}
+
 /*  Store bytes changed by reconstruction.  */
 void om_frame(u8 * buf, const u8 * mir, u32 n) {
-  int diff = 0, prev = 0;
+  int diff = 0, prev = 0, last = FH_N;
   u32 lo = 0, hi = 0, i, span = 0;
+  okey cls = (okey) gap_cls << 16;
   if (om_mode != OM_DEC) {
     while (lo < n && buf[lo] == mir[lo]) lo++;
     if (lo < n) {
@@ -961,19 +998,47 @@ void om_frame(u8 * buf, const u8 * mir, u32 n) {
       span = hi - lo;
     }
   }
-  om_bit(K_FSLACK, (u16) (65535U - (65536U >> 12)), &diff);
-  if (!diff) return;
-  om_uni(&lo, n);
-  FATAL_IF_HOT(om_mode == OM_DEC && lo >= n)
-    ("opus: frame patch starts at %lu of %lu", (unsigned long) lo, (unsigned long) n);
-  om_uni(&span, n - lo);
+  om_bit(K_FSLACK | cls, gap_cls != GAP_LAVC
+         ? (u16) (65535U - (65536U >> 12)) : 0x8000, &diff);
+  if (!diff) { fh_push(buf, n);  return; }
+  if (gap_cls == GAP_LAVC) {
+    /*  The gap moves little from frame to frame.  */
+    opus_int64 d = (opus_int64) lo - fh_lo;
+    resid(K_FHIT | (okey) 0xF0 << 8, &d);
+    lo = (u32) ((opus_int64) fh_lo + d);
+    FATAL_IF_HOT(om_mode == OM_DEC && (d < -(opus_int64) fh_lo || lo >= n))
+      ("opus: frame patch starts at %lu of %lu", (unsigned long) lo, (unsigned long) n);
+    d = (opus_int64) span - fh_span;
+    resid(K_FHIT | (okey) 0xF1 << 8, &d);
+    span = (u32) ((opus_int64) fh_span + d);
+    FATAL_IF_HOT(om_mode == OM_DEC && (d < -(opus_int64) fh_span || span >= n - lo))
+      ("opus: frame patch spans %lu of %lu", (unsigned long) span, (unsigned long) (n - lo));
+    fh_lo = lo;  fh_span = span;
+  } else {
+    om_uni(&lo, n);
+    FATAL_IF_HOT(om_mode == OM_DEC && lo >= n)
+      ("opus: frame patch starts at %lu of %lu", (unsigned long) lo, (unsigned long) n);
+    om_uni(&span, n - lo);
+  }
   hi = lo + span;
   for (i = lo; i <= hi; i++) {
-    int v = om_mode == OM_DEC ? 0 : buf[i];
-    byte_ctx(K_FBYTE, 0, prev, &v);
+    int v = om_mode == OM_DEC ? 0 : buf[i], j, k, hit = 0;
+    /*  Try each distinct earlier byte at this offset, most recent first.  */
+    for (j = 0; j < FH_N && !hit; j++) {
+      int c;
+      if (i >= fhn[j]) continue;
+      c = fh[j][i];
+      for (k = 0; k < j; k++) if (i < fhn[k] && fh[k][i] == c) break;
+      if (k < j) continue;
+      hit = om_mode != OM_DEC && v == c;
+      om_bit(K_FHIT | cls | (okey) j << 8 | (okey) last, 0x8000, &hit);
+      if (hit) { v = c;  last = j; }
+    }
+    if (!hit) { byte_ctx(K_FBYTE, 0, prev, &v);  last = FH_N; }
     buf[i] = (u8) v;
     prev = v;
   }
+  fh_push(buf, n);
 }
 
 /*  Use unsigned magnitudes to avoid signed overflow.  */
@@ -1389,6 +1454,16 @@ int opus_pack(const char * in, const char * out, int lev) {
       tag_reader r;
       u = (u32) s.pk[1].len;  oc_u32(&u);
       tag_open(&r, input, s.pk + 1);
+      { u8 vb[16];  u32 vn = 0;
+        gap_cls = GAP_OTHER;
+        if (r.len >= 12) {
+          tag_read(&r, 8, vb, 4);
+          vn = (u32) vb[0] | (u32) vb[1] << 8 | (u32) vb[2] << 16 | (u32) vb[3] << 24;
+          vn = (u32) MIN((sz) vn, MIN(r.len - 12, sizeof vb));
+          tag_read(&r, 12, vb, vn);
+          gap_cls = gap_class(vb, vn);
+        }
+        om_int(K_GAPCLS, GAP_NCLS, 192, 28, 16384, &gap_cls); }
       c.enc = 1;  c.input = &r;  c.read = tag_read;
       c.coder = NULL;  c.bit = comment_bit;  c.output = NULL;  c.write = NULL;
       cmt_code(&c, u, 1);  free(r.ext);
@@ -1517,6 +1592,8 @@ int opus_unpack(const char * in, const char * out) {
       c.enc = 0;  c.input = NULL;  c.read = NULL;
       c.coder = NULL;  c.bit = comment_bit;
       c.output = &w;  c.write = page_bytes;
+      gap_cls = 0;  om_int(K_GAPCLS, GAP_NCLS, 192, 28, 16384, &gap_cls);
+      FATAL_UNLESS(gap_cls < GAP_NCLS, "opus: invalid encoder class");
       cmt_code(&c, u, 1);  page_endpacket(&w);
     }
 
