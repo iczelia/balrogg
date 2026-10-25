@@ -27,8 +27,15 @@ trap 'rm -rf "$work" "$stage"' EXIT HUP INT TERM
 mkdir -p "$work/download" "$work/djgpp" "$stage/share/balrogg-dos/bin"
 
 freedos=FD14-FloppyEdition.zip
-freedos_url=https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.4
-curl -fL "$freedos_url/$freedos" -o "$work/download/$freedos"
+freedos_url=https://download.freedos.org/1.4
+freedos_mirror=https://www.ibiblio.org/pub/micro/pc-stuff/freedos/files/distributions/1.4
+echo "Downloading $freedos from $freedos_url"
+curl -fL --retry 3 --connect-timeout 30 --max-time 300 \
+  "$freedos_url/$freedos" -o "$work/download/$freedos" || {
+  echo "Trying FreeDOS mirror: $freedos_mirror"
+  curl -fL --retry 3 --connect-timeout 30 --max-time 300 \
+    "$freedos_mirror/$freedos" -o "$work/download/$freedos"
+}
 echo "45b1fa7c52dd996c3bfa5e352ffcd410781b952a6ad629f15a4c9ec4bbaefc5a  $work/download/$freedos" |
   sha256sum -c -
 
@@ -37,7 +44,9 @@ deacda0488e1cdd7c4a9f32fab45662b34c0ed6b2d7d4d13bc07041b62004a8c v2misc/csdpmi7b
 
 echo "$packages" | while read sum path; do
   file=${path##*/}
-  curl -fL "https://www.delorie.com/pub/djgpp/current/$path" \
+  echo "Downloading DJGPP guest utility: $path"
+  curl -fL --retry 3 --connect-timeout 30 --max-time 300 \
+    "https://www.delorie.com/pub/djgpp/current/$path" \
     -o "$work/download/$file"
   echo "$sum  $work/download/$file" | sha256sum -c -
   unzip -q -o "$work/download/$file" -d "$work/djgpp"

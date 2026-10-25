@@ -494,7 +494,14 @@ jobs:
           path: ~/.cache/balrogg-freedos
           key: freedos-${{ runner.os }}-${{ runner.arch }}-${{ env.FREEDOS_VERSION }}-${{ hashFiles('contrib/dos/install-freedos.sh') }}
 
-      - name: Install the DJGPP cross-toolchain and FreeDOS guest
+      - name: Cache the DJGPP cross-toolchain
+        id: djgpp-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/djgpp
+          key: djgpp-${{ runner.os }}-${{ runner.arch }}-${{ env.DJGPP_RELEASE }}-${{ env.DJGPP_GCC }}
+
+      - name: Install DOS dependencies and the FreeDOS guest
         run: |
           #  The prebuilt ar and ranlib require the flex runtime.
           sudo apt-get update
@@ -503,9 +510,18 @@ jobs:
           contrib/dos/install-freedos.sh "$guest"
           echo "FREEDOS_ROOT=$guest/share/balrogg-dos" >> $GITHUB_ENV
           if test -e /dev/kvm; then sudo chmod 666 /dev/kvm; fi
-          curl -fL -o /tmp/djgpp.tar.bz2 \
+
+      - name: Download the DJGPP cross-toolchain
+        if: steps.djgpp-cache.outputs.cache-hit != 'true'
+        run: |
+          curl -fL --retry 5 --connect-timeout 30 --max-time 600 \
+            -o "$RUNNER_TEMP/djgpp.tar.bz2" \
             "https://github.com/andrewwutw/build-djgpp/releases/download/${DJGPP_RELEASE}/djgpp-linux64-gcc${DJGPP_GCC}.tar.bz2"
-          tar -xjf /tmp/djgpp.tar.bz2 -C "$HOME"
+          tar -xjf "$RUNNER_TEMP/djgpp.tar.bz2" -C "$HOME"
+
+      - name: Set up the DJGPP cross-toolchain
+        run: |
+          "$HOME/djgpp/bin/i586-pc-msdosdjgpp-gcc" --version
           echo "$HOME/djgpp/bin" >> $GITHUB_PATH
 
       - name: Build for MS-DOS
