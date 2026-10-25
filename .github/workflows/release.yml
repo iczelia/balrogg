@@ -318,7 +318,7 @@ jobs:
             qemu: arm
             libc: armhf
     env:
-      QEMU: qemu-${{ matrix.target.qemu }}-static
+      QEMU: qemu-${{ matrix.target.qemu }}
     steps:
       - name: Download the source package artifact
         uses: actions/download-artifact@v7
@@ -328,7 +328,7 @@ jobs:
       - name: Install the cross-toolchain and QEMU
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-user-static \
+          sudo apt-get install -y qemu-user \
             gcc-${{ matrix.target.host }} \
             libc6-dev-${{ matrix.target.libc }}-cross
 
