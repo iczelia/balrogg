@@ -11,12 +11,12 @@
 .\"
 .\"  You should have received a copy of the GNU General Public License
 .\"  along with this program. If not, see <http://www.gnu.org/licenses/>.
-.TH BALROGG 1 "2026-09-03" "balrogg 1.0" "User Commands"
+.TH BALROGG 1 "@BLR_DATE@" "balrogg @PACKAGE_VERSION@" "User Commands"
 .SH NAME
 balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .SH SYNOPSIS
 .B balrogg
-.RB [ \-1 .. \-9 ]
+.RB [ \-1 .. \-20 ]
 .RB [ \-p ]
 .B e
 .I input output
@@ -27,7 +27,7 @@ balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .I input output
 .br
 .B balrogg
-.RB [ \-1 .. \-9 ]
+.RB [ \-1 .. \-20 ]
 .RB [ \-p ]
 .RB [ \-j
 .IR N ]
@@ -36,26 +36,12 @@ balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .IR file ...
 .br
 .B balrogg
-.B dump
-.I archive
-.br
-.B balrogg
-.B pages
-.I oggfile
-.br
-.B balrogg
 .BR \-h | \-v
 .SH DESCRIPTION
 .B balrogg
-losslessly recompresses Ogg Vorbis and Opus files. Expanding an archive restores
-the original bytes.
-.PP
-Both verbs detect the codec from the input.
-.B e
-uses the first Ogg page and
-.B d
-uses the archive header.
-.SH VERBS
+losslessly recompresses Ogg Vorbis and Opus files, and MP3 files (MPEG-1, 2
+and 2.5 Layer III). Expanding an archive restores the original bytes.
+.SH OPERATIONS
 .TP
 .B e
 Compress
@@ -69,32 +55,18 @@ Expand the archive
 .I input
 to
 .IR output .
-.TP
-.B dump
-Print an archive's header, tune and stream lengths.
-.TP
-.B pages
-Print every page of an Ogg file and whether it can be reframed.
+The archive stores the length and CRC-32C of the original file; a decoded file
+that does not match them is refused and removed.
 .SH OPTIONS
 .TP
-.BR \-1 " .. " \-9
+.BR \-1 " .. " \-20
 Effort.
-.B \-4
-is the default. Through
-.B \-4
-each level adds a residue-model stage and affects decoding. Above
-.B \-4
-only the encoder's parameter search grows. The archive stores those parameters,
-so decoding runs at one speed from
-.B \-4
-.IR onward .
-Tuning evaluates the whole file. The best encoded candidate is retained
-without an additional encode pass to write the winner.
+.B \-8
+is the default. Each level is (ideally) no faster than the one below it and gives
+archives no larger on any class of file.
 .TP
 .BR \-p ", " \-\-progress
-Show encoding, decoding and individual Vorbis tuning progress bars on stderr.
-Progress is off by default. The final phase reaches 100 percent only after
-the output is written. Batch mode uses separate lines labeled by input file.
+Show encoding and decoding progress bars on stderr. Off by default.
 .TP
 .B \-\-progress-lines
 Write progress checkpoints as separate lines, suitable for log files.
@@ -127,7 +99,8 @@ Print the version, build host, and source libopus release.
 Success.
 .TP
 .B 1
-Malformed, unsupported, or unrecognized input. In batch mode, at least one
+Malformed, unsupported, or unrecognized input, or a decoded file that fails
+its checksum. In batch mode, at least one
 file was refused and no higher status occurred.
 .TP
 .B 2
@@ -144,10 +117,16 @@ Internal error.
 Per-process memory cap in MiB. The default is 2048. A value of 0 disables it.
 Sanitizer builds omit the cap.
 .TP
+.B BLR_REGION
+A value of 0 takes blocks of 1 KiB to 4 MiB from the C library, not from the
+never-unmapped region that serves them otherwise.
+.B \-\-no\-mmap
+does the same.
+.TP
 .B BLR_SIMD
 Select the context-mixer kernel on x86.
 .B scalar
-forces the portable kernel;
+forces the portable kernel and the portable CRC-32C;
 .B sse2
 and
 .B avx2
@@ -155,15 +134,16 @@ require the requested kernel to be built and supported by the CPU.
 AVX2 also requires OS support for saving XMM and YMM state.
 The default prefers AVX2, then SSE2, then the scalar kernel.
 .SH LIMITS
-Input and output must be seekable.
+Input must be seekable, and so must the output of Ogg archives; MP3 archives
+also decode to a pipe. An output that is not a regular file, such as a pipe or
+.IR /dev/null ,
+is checked as it is written: on a checksum mismatch the bytes already written
+cannot be taken back, and only the exit status reports it.
 .PP
-Opus mode supports mono and stereo logical streams with channel mapping
-family 0, with packets (including headers) up to 61,440 bytes.
+Opus mode supports channel mapping families 0, 1 and 255, with packets
+(including headers) up to 61,440 bytes.
 Chained Opus and Vorbis files are supported. Their links share the adaptive
 models. Vorbis floor type 0 and codebook lookup type 2 are unsupported.
-Pages with bad checksums are refused.
-A Vorbis link without an end-of-stream flag is supported when it ends on a
-complete packet, whether it is the last link or the next link follows it.
 .SH EXAMPLES
 .nf
 balrogg e track.ogg track.blr

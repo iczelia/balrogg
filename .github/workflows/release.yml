@@ -14,11 +14,9 @@ permissions:
   contents: write
 
 env:
-  #  Manual runs supply the version through the tag input.
   BLR_VERSION: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  #  Package once for all release jobs.
   sources:
     name: Build sources
     runs-on: ubuntu-24.04
@@ -26,6 +24,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
         with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
           fetch-depth: 0
 
       - name: Install the archivers
@@ -35,12 +34,6 @@ jobs:
           bzip3 --version
           xz --version
 
-      - name: Regenerate the ChangeLog from the git history
-        run: |
-          contrib/gitlog-to-changelog --format='%s%n%n%b%n' > ChangeLog.tmp
-          mv ChangeLog.tmp ChangeLog
-          head -20 ChangeLog
-
       - name: Bootstrap and configure
         run: ./bootstrap && ./configure
 
@@ -48,9 +41,9 @@ jobs:
         run: |
           pkg=$(sed -n 's/^PACKAGE_VERSION = //p' Makefile)
           test "$pkg" = "$BLR_VERSION" || \
-            echo "::warning::tag $BLR_VERSION but configure.ac says $pkg"
-          make VERSION="$BLR_VERSION" dist
-          make VERSION="$BLR_VERSION" dist-zip
+            { echo "::error::tag $BLR_VERSION but git describe gives $pkg"; exit 1; }
+          make dist
+          make dist-zip
           gzip -dk "balrogg-$BLR_VERSION.tar.gz"
           bzip3 -k "balrogg-$BLR_VERSION.tar"
           ls -l "balrogg-$BLR_VERSION".*
@@ -67,7 +60,6 @@ jobs:
             balrogg-${{ env.BLR_VERSION }}.tar.xz
             balrogg-${{ env.BLR_VERSION }}.zip
 
-  #  Statically linked Windows binaries.
   windows:
     name: Build Windows ${{ matrix.target.name }}
     needs: [ sources ]
@@ -147,7 +139,6 @@ jobs:
           if-no-files-found: error
           path: output
 
-  #  Run the complete suite against each exact Windows release image.
   windows-test:
     name: Test Windows ${{ matrix.target.name }}
     needs: [ sources, windows ]
@@ -201,7 +192,7 @@ jobs:
 
       - name: Build the test harness
         run: |
-          ./configure --build="`sh ./config.guess`" \
+          ./configure --build="`sh ./build-aux/config.guess`" \
                       --host=${{ matrix.target.host }} \
                       CC=${{ matrix.target.host }}-gcc LDFLAGS=-static
           make -j4 test-programs
@@ -223,7 +214,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Linux binaries built on the oldest supported image.
   linux:
     name: Build Linux ${{ matrix.target.name }}
     needs: [ sources ]
@@ -233,14 +223,20 @@ jobs:
       matrix:
         target:
           - name: x86_64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - name: aarch64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
     steps:
       - name: Download the source package artifact
         uses: actions/download-artifact@v7
         with:
           name: balrogg-${{ env.BLR_VERSION }}
+
+      - name: Install the musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+          dpkg-query -W musl musl-dev musl-tools
 
       - name: Extract the source package
         run: |
@@ -251,10 +247,24 @@ jobs:
       - name: Configure
         run: |
           ./configure --bindir=/ --program-suffix=-linux-${{ matrix.target.name }} \
-                      CFLAGS="-O2 -g" LDFLAGS=-static
+                      CC=musl-gcc CFLAGS="-O2 -g" LDFLAGS=-static
 
       - name: Make
         run: make -j4 all
+
+      - name: Verify the dispatched kernels
+        run: |
+          ./balrogg --version
+          case "${{ matrix.target.name }}" in
+            x86_64)
+              ./balrogg --version | grep -q 'SIMD: sse2,avx2 built' \
+                || { echo "the SIMD mixers were not built"; exit 1; }
+              ./balrogg --version | grep -q 'CRC-32C: sse4.2' \
+                || { echo "the SSE4.2 CRC-32C was not dispatched"; exit 1; } ;;
+            aarch64)
+              ./balrogg --version | grep -q 'CRC-32C: armv8' \
+                || { echo "the ARMv8 CRC-32C was not dispatched"; exit 1; } ;;
+          esac
 
       - name: Full test suite
         run: VERBOSE=1 make -j4 check
@@ -277,6 +287,10 @@ jobs:
             echo "release binary has dynamic dependencies" >&2
             exit 1
           fi
+          if grep -aq GLIBC_TUNABLES "$binary"; then
+            echo "release binary links glibc, not musl" >&2
+            exit 1
+          fi
           objcopy --only-keep-debug "$binary" "$debug"
           strip --strip-all "$binary"
           ( cd output && objcopy \
@@ -291,7 +305,6 @@ jobs:
           if-no-files-found: error
           path: output
 
-  #  Statically linked Linux binaries for foreign architectures.
   linux-cross:
     name: Build Linux ${{ matrix.target.arch }}
     needs: [ sources ]
@@ -396,7 +409,6 @@ jobs:
           if-no-files-found: error
           path: output
 
-  #  Unsigned macOS binaries.
   macos:
     name: Build macOS ${{ matrix.target.name }}
     needs: [ sources ]
@@ -452,7 +464,6 @@ jobs:
           if-no-files-found: error
           path: output
 
-  #  MS-DOS binary, tested in a FreeDOS guest.
   dos:
     name: Build MS-DOS i386
     needs: [ sources ]
@@ -519,7 +530,6 @@ jobs:
               && make -j4 all \
               && make -j4 test-programs )
 
-      #  objdump provides a stable BFD target name.
       - name: Verify the DOS binary format
         run: |
           file build-dos/balrogg.exe
@@ -553,7 +563,6 @@ jobs:
           if-no-files-found: error
           path: output
 
-  #  Publish once, after every binary has been built and tested.
   publish:
     name: Publish the release
     needs: [ sources, windows-test, linux, linux-cross, macos, dos ]
@@ -614,8 +623,6 @@ jobs:
           overwrite_files: true
           files: release/*
 
-      #  Debug symbols ship only inside the bundle; drop any loose copies
-      #  left on the release by an earlier run.
       - name: Remove separately published debug symbols
         env:
           GH_TOKEN: ${{ github.token }}
