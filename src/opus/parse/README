@@ -1,0 +1,7 @@
+Opus parser
+===========
+
+This directory contains a parser derived from the libopus decoder at commit
+3da9f7a6db1c05c3996cb363a9d1931a978bf1be (2026-06-12).
+Upstream is https://github.com/xiph/opus. The code uses the 3-clause BSD
+license in COPYING.
