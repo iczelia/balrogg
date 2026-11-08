@@ -13,7 +13,7 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
 #include "t_harness.h"
-#include "rc.h"
+#include "coder/rc.h"
 #include <stdarg.h>
 
 #ifdef HAVE_DIRENT_H
@@ -57,13 +57,11 @@ void xt_init(void) {
   xt_regress = env("BLR_TEST_REGRESS");
   xt_corpus = env("BLR_TEST_CORPUS");
   xt_binary = env("BLR");
-  /*  All layers share the adaptation table.  */
   rc_adapt_init();
 }
 
 int xt_open_report(const char * path) {
 #ifdef BLR_DOS
-  /*  The guest has no visible console.  Keep fatal library diagnostics too.  */
   report = freopen(path, "w", stderr);
 #else
   report = fopen(path, "w");
@@ -115,18 +113,22 @@ int xt_finish(const char * program) {
   return xt_failures ? 1 : 0;
 }
 
-
-/*  Tracked fixtures let hosts without dirent.h run the quick suite.  */
 static const char * const VORBIS[] = {
   "tiny.ogg", "short.ogg", "silence.ogg", "tone48k.ogg", "tone_stereo.ogg",
   "noise_pink.ogg", "noise_white.ogg", "sweep.ogg", "vibrato.ogg",
   "mix_lowq.ogg", "lowfreq22k.ogg", "smallchain.ogg", "chain3.ogg",
-  "eq_mono8k.ogg", "eq_st11k.ogg", "lowbr.ogg", NULL
+  "eq_mono8k.ogg", "eq_st11k.ogg", "lowbr.ogg", "surround51.ogg",
+  "surround71.ogg", NULL
 };
 
 static const char * const OPUS[] = {
   "silence_st_64k.opus", "silk_speech_12k.opus", "silk_mono_16k.opus",
   "hyb_mono_40k.opus", "celt_st_96k_60ms.opus", "celt_st_128k.opus", NULL
+};
+
+static const char * const MP3[] = {
+  "cbr128_tags.mp3", "vbr_v4.mp3", "lsf22_mono.mp3", "m25_8k.mp3",
+  "crc_lr48k.mp3", "free_32k.mp3", "nores_32k.mp3", NULL
 };
 
 typedef struct { char ** v;  int n, cap; } strlist;
@@ -151,7 +153,6 @@ static int by_name(const void * a, const void * b) {
   return strcmp(*(char * const *) a, *(char * const *) b);
 }
 
-/*  Find matching files up to two levels deep and sort them.  */
 static void scan(strlist * l, const char * dir, const char * ext, int depth) {
   DIR * d = opendir(dir);
   struct dirent * e;
@@ -161,14 +162,15 @@ static void scan(strlist * l, const char * dir, const char * ext, int depth) {
   while ((e = readdir(d)) != NULL) {
     struct stat st;
     if (e->d_name[0] == '.') continue;
-    if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >= (int) sizeof path)
-      continue;
+    if (snprintf(path, sizeof path, "%s/%s", dir, e->d_name) >=
+        (int) sizeof path) continue;
     if (stat(path, &st)) continue;
     if (S_ISDIR(st.st_mode)) { if (depth > 0) scan(l, path, ext, depth - 1); }
     else if (S_ISREG(st.st_mode) && ends_with(e->d_name, ext)) push(l, path);
   }
   closedir(d);
-  if (l->n > first) qsort(l->v + first, (sz) (l->n - first), sizeof *l->v, by_name);
+  if (l->n > first)
+    qsort(l->v + first, (sz) (l->n - first), sizeof *l->v, by_name);
 }
 #endif
 
@@ -177,8 +179,8 @@ void xt_dos_name(const char * name, char * out, sz cap) {
   const char * dot = strrchr(name, '.'), * p;
   sz n = 0, m;
   for (p = name; *p && p != dot && n < sizeof stem - 1; p++)
-    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') || (*p >= '0' && *p <= '9'))
-      stem[n++] = *p;
+    if ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+        (*p >= '0' && *p <= '9')) stem[n++] = *p;
   stem[n] = 0;
   if (n > 8) { memmove(stem + 5, stem + n - 3, 3);  stem[8] = 0; }
   m = dot ? strlen(dot + 1) : 0;
@@ -204,7 +206,8 @@ const char * xt_fixture(const char * dir, const char * name) {
 
 char ** xt_files(const char * ext) {
   strlist l;
-  const char * const * fx = !strcmp(ext, ".ogg") ? VORBIS : OPUS;
+  const char * const * fx = !strcmp(ext, ".ogg") ? VORBIS
+                          : !strcmp(ext, ".mp3") ? MP3 : OPUS;
   l.v = NULL;  l.n = l.cap = 0;
   if (xt_data)
     for (; *fx; fx++) push(&l, xt_fixture(xt_data, *fx));
@@ -217,8 +220,8 @@ char ** xt_files(const char * ext) {
 
 void xt_files_free(char ** list) {
   char ** p;
-  for (p = list; *p; p++) free(*p);
-  free(list);
+  for (p = list; *p; p++) xfree(*p);
+  xfree(list);
 }
 
 int xt_files_count(char ** list) {
@@ -237,20 +240,20 @@ const char * xt_basename(const char * path) {
 }
 
 const char * xt_tmp(const char * tag) {
-  static char buf[64][128], tags[64][32];
+  static char buf[96][128], tags[96][32];
   static int used;
   int i;
   Fi(used, if (!strcmp(tags[i], tag)) return buf[i]);
-  if (used == 64) FATAL_CODE(BLR_EXIT_INTERNAL, "t_suite: too many scratch names");
-  FATAL_UNLESS(strlen(tag) < sizeof tags[0], "t_suite: scratch tag is too long");
+  if (used == 96)
+    FATAL_CODE(BLR_EXIT_INTERNAL, "t_suite: too many scratch names");
+  FATAL_UNLESS(strlen(tag) < sizeof tags[0],
+               "t_suite: scratch tag is too long");
   strcpy(tags[used], tag);
 #if defined(BLR_DOS)
   { char dos[32];
     const char * ext;
     xt_dos_name(tag, dos, sizeof dos);
     ext = strrchr(dos, '.');
-    /*  Reserve the prefix inside the eight-character stem.  The slot keeps
-        different tags distinct even when their shortened 8.3 names collide.  */
     snprintf(buf[used], sizeof buf[used], "ts%02d%s", used, ext ? ext : ""); }
 #else
   snprintf(buf[used], sizeof buf[used], "t_suite-%s.tmp", tag);
@@ -293,7 +296,7 @@ int xt_same_file(const char * a, const char * b) {
   fclose(f);
   x = slurp(a, &an);  y = slurp(b, &bn);
   eq = an == bn && !memcmp(x, y, an);
-  free(x);  free(y);
+  xfree(x);  xfree(y);
   return eq;
 }
 
@@ -315,8 +318,11 @@ static int split_args(char * s, char ** argv, int cap) {
     if (n + 1 >= cap) return -1;
     argv[n++] = w = s;
     while (*s && *s != ' ') {
-      if (*s == '"') { s++;  while (*s && *s != '"') *w++ = *s++;  if (*s) s++; }
-      else *w++ = *s++;
+      if (*s == '"') {
+        s++;
+        while (*s && *s != '"') *w++ = *s++;
+        if (*s) s++;
+      } else *w++ = *s++;
     }
     if (*s) s++;
     *w = 0;
@@ -347,16 +353,17 @@ int xt_run(const char * args, const char * out) {
 }
 #else
 
-/*  Quote for sh, with an outer pair required by cmd.exe on Windows.  */
 int xt_run(const char * args, const char * out) {
   char cmd[16384];
   int st, n;
   if (!xt_binary) return -1;
 #ifdef BLR_WIN32
-  if (out) n = snprintf(cmd, sizeof cmd, "\"\"%s\" %s > \"%s\" 2>&1\"", xt_binary, args, out);
+  if (out) n = snprintf(cmd, sizeof cmd, "\"\"%s\" %s > \"%s\" 2>&1\"",
+                        xt_binary, args, out);
   else     n = snprintf(cmd, sizeof cmd, "\"\"%s\" %s\"", xt_binary, args);
 #else
-  if (out) n = snprintf(cmd, sizeof cmd, "\"%s\" %s > \"%s\" 2>&1", xt_binary, args, out);
+  if (out) n = snprintf(cmd, sizeof cmd, "\"%s\" %s > \"%s\" 2>&1",
+                        xt_binary, args, out);
   else     n = snprintf(cmd, sizeof cmd, "\"%s\" %s", xt_binary, args);
 #endif
   if (n < 0 || n >= (int) sizeof cmd) return -1;
@@ -366,7 +373,7 @@ int xt_run(const char * args, const char * out) {
   if (st == -1) return -1;
 #if defined(WIFEXITED) && defined(WEXITSTATUS)
   if (WIFEXITED(st)) return WEXITSTATUS(st);
-  return 128;                           /*  a signal, as the shell reports it  */
+  return 128;
 #else
   return st;
 #endif
@@ -382,8 +389,8 @@ int xt_file_contains(const char * path, const char * needle) {
   fclose(f);
   b = slurp(path, &n);
   for (i = 0; i + m <= n; i++)
-    if (!memcmp(b + i, needle, m)) { free(b);  return 1; }
-  free(b);
+    if (!memcmp(b + i, needle, m)) { xfree(b);  return 1; }
+  xfree(b);
   return 0;
 }
 
@@ -398,7 +405,7 @@ int xt_file_before(const char * path, const char * first, const char * second) {
   b = slurp(path, &n);  b = xrealloc(b, n + 1);  b[n] = 0;
   a = strstr((char *) b, first);  z = strstr((char *) b, second);
   before = a && z && a < z;
-  free(b);
+  xfree(b);
   return before;
 }
 
@@ -407,4 +414,11 @@ void xt_seed(xt_rng * r, u32 seed) { r->s = seed ? seed : 20260810UL; }
 u32 xt_next(xt_rng * r, u32 n) {
   r->s = r->s * 1664525UL + 1013904223UL;
   return (r->s >> 8) % n;
+}
+
+sz xt_ogg_emit(const ogg_page * p, u8 * out, const u8 * body) {
+  sz n;
+  memmove(out + OGG_HDRMIN + p->nseg, body, p->blen);
+  ogg_wrap(p, out + OGG_HDRMIN + p->nseg, &n);
+  return n;
 }

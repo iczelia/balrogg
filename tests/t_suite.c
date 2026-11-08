@@ -17,7 +17,6 @@
 int main(int argc, char ** argv) {
   int i;
   xt_init();
-  /*  Sections can be picked on the command line for a quicker turn.  */
   if (argc > 1) {
     int picked = 0;
     for (i = 1; i < argc; i++) {
@@ -35,7 +34,9 @@ int main(int argc, char ** argv) {
       else if (!strcmp(argv[i], "files")) xt_run_files();
       else if (!strcmp(argv[i], "cli")) xt_run_cli();
       else if (!strcmp(argv[i], "regress")) xt_run_regress();
-      else { fprintf(stderr, "t_suite: unknown section %s\n", argv[i]);  return 2; }
+      else {
+        fprintf(stderr, "t_suite: unknown section %s\n", argv[i]);  return 2;
+      }
     }
     if (picked) return xt_finish("t_suite");
   }

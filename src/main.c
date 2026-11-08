@@ -12,21 +12,22 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-/*  Command line and batch execution.  */
-
-#include "codec.h"
-#include "archive.h"
-#include "ogg.h"
-#include "vorbis.h"
-#include "yarg.h"
-#include "opusmode.h"
-#include "cpu.h"
-#include "prof.h"
+#ifdef HAVE_CONFIG_H
+#include "config.h"
+#endif
+#include "sys/yarg.h"
+#include "vorbis/vorbis.h"
+#include "fmt/arc.h"
+#include "opus/opus.h"
+#include "mp3/mp3.h"
+#include "sys/cpu.h"
+#include "sys/crc.h"
+#include "sys/prof.h"
 
 #include <errno.h>
 #include <limits.h>
 #ifdef BLR_WIN32
-#include "win32.h"
+#include "sys/win32.h"
 #else
 #include <sys/stat.h>
 #endif
@@ -36,16 +37,20 @@
 #ifdef HAVE_SYS_WAIT_H
 #include <sys/wait.h>
 #endif
+#ifdef HAVE_SCHED_GETAFFINITY
+#include <sched.h>
+#endif
 
-/*  The native Windows runtime calls blr_main from its own entry point.  */
 #if defined(BLR_WIN_CRT)
 int blr_main(int argc, char ** argv);
 #define main blr_main
 #endif
 
+#define BLR_DEFLEV 8
+
 static void banner(FILE * to) {
   fprintf(to,
-    "balrogg " PACKAGE_VERSION " -- demonically compacting OGG recompressor\n"
+    "balrogg " PACKAGE_VERSION " -- demonically compacting audio recompressor\n"
     "Written by Kamila Szewczyk <k@iczelia.net>.\n"
     "License GNU GPL version 3.\n");
 }
@@ -54,14 +59,13 @@ static void usage(FILE * to) {
   banner(to);
   fprintf(to,
     "\n"
-    "usage: balrogg [-1..-9] e IN OUT       compress Ogg to OUT\n"
+    "usage: balrogg [-1..-%d] e IN OUT      compress Ogg or MP3 to OUT\n"
     "       balrogg d IN OUT                expand archive to OUT\n"
-    "       balrogg [-1..-9] -b e|d FILE... process files in parallel\n"
-    "       balrogg dump IN                 print an archive's layout\n"
-    "       balrogg pages IN                print an Ogg file's page framing\n"
+    "       balrogg [-1..-%d] -b e|d FILE... process files in parallel\n"
     "       balrogg -h | -v\n"
     "\n"
-    "  -1 .. -9      effort; -4 is the default\n"
+    "  -1 .. -%-6d effort: each level is slower and smaller than the one\n"
+    "                below it; -%d is the default; decoding needs no level\n"
     "  -b, --batch   process every remaining path\n"
     "  -j, --jobs=N  process N files at once\n"
     "  -p, --progress show tuning and codec progress on stderr\n"
@@ -70,7 +74,7 @@ static void usage(FILE * to) {
     "  -h, --help    show help        -v, --version   show version\n"
     "\n"
     "Exit codes  0 success, 1 refused input, 2 usage, 3 I/O error,\n"
-    "4 internal error.\n");
+    "4 internal error.\n", BLR_NLEV, BLR_NLEV, BLR_NLEV, BLR_DEFLEV);
 }
 
 static void version(void) {
@@ -81,60 +85,10 @@ static void version(void) {
          "There is NO WARRANTY, to the extent permitted by law.\n");
   printf("Ogg Opus mode: %s\n", opus_mode_version());
   printf("SIMD: %s built, %s dispatched\n", blr_simd_built(),
-         blr_simd_dispatched());
+         cm_dispatched());
+  printf("CRC-32C: %s\n", crc32c_dispatched());
 }
 
-static void dump(const char * path) {
-  archive a;
-  sz i, len;
-  blr_file * b = bf_open(path, 0);
-  len = b->len;
-  arc_read(&a, b);
-  printf("%s: %lu bytes, flags 0x%02x (%lu slots, %s, level %d), %lu streams\n",
-         path, (unsigned long) len, a.flags,
-         (unsigned long) (ARC_BLOCK(a.flags) >> 10),
-         ARC_SOLID(a.flags) ? "solid" : "non-solid", (int) ARC_LEVEL(a.flags),
-         (unsigned long) a.n);
-  if (a.flags & ARC_OPUS) printf("  Ogg Opus mode\n");
-  if (a.ntune) {
-    vb_tune t;
-    vb_tune_get(&t, a.tune, a.ntune);
-    printf("  tune: adapt cap %u, CM rate %u, flags 0x%02x%s%s\n",
-           t.alim, t.lr, t.flags,
-           t.flags & VB_TF_CLS ? " (class from the previous packet)" : "",
-           t.flags & VB_TF_MATCH ? " (match model)" : "");
-  }
-  Fi(a.n, printf("  stream %lu: %lu bytes\n",
-                 (unsigned long) i, (unsigned long) a.s[i].len));
-  arc_free(&a);  bf_close(b);
-}
-
-/*  Print framing rebuilt from the parsed page.  */
-static void pages(const char * path) {
-  ogg_page p;
-  sz len, at = 0, n = 0, got;
-  blr_file * input = bf_open(path, 0);
-  u8 * b = xmalloc(OGG_HDRMIN + OGG_MAXSEG + OGG_MAXSEG * OGG_MAXSEG);
-  u8 * img = xmalloc(OGG_HDRMIN + OGG_MAXSEG + OGG_MAXSEG * OGG_MAXSEG);
-  len = input->len;
-  printf("%s: %lu bytes\n", path, (unsigned long) len);
-  while (at < len) {
-    const u8 * body;
-    got = ogg_read(input, at, &p, b);
-    FATAL_UNLESS(got != 0, "%s: no Ogg page at %lu", path, (unsigned long) at);
-    body = b + OGG_HDRMIN + p.nseg;
-    printf("  page %-5lu type %02x  granule %08lx%08lx  serial %08lx  seq %-6lu"
-           "  %3d seg  %3d pkt  %6lu B  %s\n", (unsigned long) n, p.type,
-           (unsigned long) p.ghi, (unsigned long) p.glo, (unsigned long) p.serial,
-           (unsigned long) p.seq, p.nseg, p.np, (unsigned long) got,
-           ogg_emit(&p, img, body) == got && !memcmp(img, b, got)
-             ? "reframes" : "REFRAME MISMATCH");
-    at += got;  n++;
-  }
-  free(img);  free(b);  bf_close(input);
-}
-
-/*  Read up to `max` bytes; return -1 if open fails.  */
 static int peek(const char * path, u8 * b, int max) {
   sz n;
   int bad;
@@ -147,14 +101,25 @@ static int peek(const char * path, u8 * b, int max) {
   return (int) n;
 }
 
-enum { F_READ = -2, F_BAD = -1, F_UNKNOWN = 0, F_VORBIS = 1, F_OPUS = 2 };
+enum {
+  F_READ = -2, F_BAD = -1, F_UNKNOWN = 0, F_VORBIS = 1, F_OPUS = 2, F_MP3 = 3
+};
 
-/*  Detect a codec from the first page's identification header.  */
+#define BLR_MP3_PEEK (1 << 20)
+
+static int sniff_mp3(const char * path) {
+  u8 * b = xmalloc(BLR_MP3_PEEK);
+  int n = peek(path, b, BLR_MP3_PEEK),
+      r = n > 0 && mp3_sniff(b, (sz) n, n < BLR_MP3_PEEK);
+  xfree(b);
+  return r ? F_MP3 : F_UNKNOWN;
+}
+
 static int sniff(const char * path) {
   u8 b[512];
   int n = peek(path, b, (int) sizeof b), at;
   if (n < 0) return n;
-  if (n < 28 || memcmp(b, "OggS", 4)) return F_UNKNOWN;
+  if (n < 28 || memcmp(b, "OggS", 4)) return sniff_mp3(path);
   at = 27 + b[26];
   if (at + 8 > n) return F_UNKNOWN;
   if (!memcmp(b + at, "\001vorbis", 7)) return F_VORBIS;
@@ -162,16 +127,13 @@ static int sniff(const char * path) {
   return F_UNKNOWN;
 }
 
-/*  Detect an Opus archive.  */
 static int arc_is_opus(const char * path) {
   u8 b[ARC_HDRLEN];
   int n = peek(path, b, (int) sizeof b);
-  return n >= (int) ARC_HDRLEN && !memcmp(b, ARC_MAGIC, ARC_MAGLEN)
-         && b[ARC_MAGLEN] == ARC_VER && b[ARC_MAGLEN + 1] & ARC_OPUS;
+  return n >= (int) ARC_HDRLEN && arc_is(b, (sz) n) &&
+         b[ARC_MAGLEN + 1] & ARC_KOPUS;
 }
 
-/*  File identity and size without the C runtime's stat(), which the
-    Windows 95 build lacks and which reports no inode on Windows anyway.  */
 typedef unsigned long long bytes_t;
 
 #if defined(BLR_WIN32)
@@ -187,7 +149,8 @@ static int same_file(const char * a, const char * b) {
   hb = blr_win_open(b, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE,
                     OPEN_EXISTING, 0);
   if (hb != INVALID_HANDLE_VALUE) {
-    if (GetFileInformationByHandle(ha, &x) && GetFileInformationByHandle(hb, &y))
+    if (GetFileInformationByHandle(ha, &x) &&
+        GetFileInformationByHandle(hb, &y))
       same = x.dwVolumeSerialNumber == y.dwVolumeSerialNumber
              && x.nFileIndexHigh == y.nFileIndexHigh
              && x.nFileIndexLow == y.nFileIndexLow;
@@ -197,7 +160,6 @@ static int same_file(const char * a, const char * b) {
   return same;
 }
 
-/*  The size of a regular file, or zero.  */
 static bytes_t file_size(const char * path) {
   DWORD lo, hi = 0, error, attr = blr_win_attrs(path);
   HANDLE h;
@@ -231,39 +193,83 @@ static bytes_t file_size(const char * path) {
 
 #endif
 
-/*  Levels 1-4 add models; higher levels expand the encoder search.  */
+static int level_acm(int level) {
+  int i, acm = 0;
+  Fi(VC_N, acm |= vb_config_acm(vb_level_cfg(level, i)));
+  Fi(OC_N, acm |= opus_config_acm(opus_level_cfg(level, i)));
+  return acm;
+}
 
-typedef struct { int vidx, odepth, search; } effort;
+static int code_one(int enc, const char * in, const char * out,
+                    int level);
 
-static const effort EFFORT[9] = {
-  { 0, 0, 0 },   /*  -1  */
-  { 1, 1, 0 },   /*  -2  */
-  { 2, 2, 0 },   /*  -3  */
-  { 3, 3, 0 },   /*  -4  */
-  { 3, 4, 2 },   /*  -5  */
-  { 3, 5, 4 },   /*  -6  */
-  { 3, 6, 6 },   /*  -7  */
-  { 3, 6, 8 },   /*  -8  */
-  { 3, 6, 12 }   /*  -9  */
-};
-
+static int check_sum(const char * in, const char * out) {
+  u8 h[MAX(ARC_OGGHDR, ARC_MP3HDR + ARC_SUMLEN)];
+  u32 want, got;
+  int n = peek(in, h, (int) sizeof h), streamed = 0;
+  if (n < 0 || !arc_sum_peek(h, (sz) n, &want)) {
+    fprintf(stderr, "balrogg: %s: the archive header is truncated\n", in);
+    return BLR_EXIT_REFUSED;
+  }
+  if (!bf_crc_path(out, &got)) {
+    if (!bf_crc_output(&got)) {
+      fprintf(stderr,
+              "balrogg: %s: the output cannot be read back to check it\n", out);
+      return BLR_EXIT_IO;
+    }
+    streamed = 1;
+  }
+  if (got == want) return BLR_EXIT_OK;
+  if (streamed)
+    fprintf(stderr, "balrogg: %s: checksum mismatch: "
+                    "the archive is damaged and %s is wrong\n", in, out);
+  else
+    fprintf(stderr, "balrogg: %s: checksum mismatch: the archive is damaged\n", in);
+  return BLR_EXIT_REFUSED;
+}
 
 static int do_one(int enc, const char * in, const char * out,
-                  const vb_opt * o, const effort * e) {
-  /*  Refuse identical paths and hard links before opening the output.  */
+                  int level) {
   if (same_file(in, out)) {
     fprintf(stderr, "balrogg: %s is both input and output\n", in);
     return BLR_EXIT_IO;
   }
+  { int rc;
+    bf_doom(out);
+    arc_sum_set(0);
+    rc = code_one(enc, in, out, level);
+    if (!rc && !enc) rc = check_sum(in, out);
+    if (rc) bf_doomed_remove();
+    bf_doom(NULL);
+    return rc; }
+}
+
+static int code_one(int enc, const char * in, const char * out,
+                    int level) {
+  int kind;
+  u32 crc;
   if (!enc) {
     if (arc_is_opus(in)) return opus_unpack(in, out);
+    if (mp3_is_archive(in)) return mp3_unpack(in, out);
     vb_unpack(in, out);  return BLR_EXIT_OK;
   }
-  switch (sniff(in)) {
+  kind = sniff(in);
+  if (kind > F_UNKNOWN) {
+    if (!bf_crc_path(in, &crc)) {
+      fprintf(stderr, "balrogg: %s is not a regular file\n", in);
+      return BLR_EXIT_IO;
+    }
+    arc_sum_set(crc);
+  }
+  switch (kind) {
   case F_OPUS:
-    return opus_pack(in, out, e->odepth);
+    { int cfg[OC_N], i;
+      Fi(OC_N, cfg[i] = opus_level_cfg(level, i));
+      return opus_pack_classed(in, out, cfg); }
+  case F_MP3:
+    return mp3_pack(in, out, mp3_level_cfg(level));
   case F_UNKNOWN:
-    fprintf(stderr, "balrogg: %s is not Ogg Vorbis or Ogg Opus\n", in);
+    fprintf(stderr, "balrogg: %s is not Ogg Vorbis, Ogg Opus or MP3\n", in);
     return BLR_EXIT_REFUSED;
   case F_BAD:
     fprintf(stderr, "balrogg: cannot open %s\n", in);
@@ -272,14 +278,15 @@ static int do_one(int enc, const char * in, const char * out,
     fprintf(stderr, "balrogg: cannot read %s\n", in);
     return BLR_EXIT_IO;
   case F_VORBIS:
-    vb_pack(in, out, o);  return BLR_EXIT_OK;
+    vb_pack(in, out, vb_level_cfg(level, vb_classify(in)));
+    return BLR_EXIT_OK;
   }
   return BLR_EXIT_INTERNAL;
 }
 
-/*  Processes isolate mutable model state.  */
-
 #define BLR_JOB_FIXED (72UL << 20)
+#define BLR_JOB_ACM   (512UL << 20)
+static int blr_acm;
 
 static long blr_cores(void) {
 #if defined(BLR_WIN32)
@@ -289,18 +296,21 @@ static long blr_cores(void) {
 #elif defined(BLR_DOS)
   return 1;
 #elif defined(HAVE_SYSCONF) && defined(_SC_NPROCESSORS_ONLN)
-  long n = sysconf(_SC_NPROCESSORS_ONLN);
+  long n;
+#if defined(HAVE_SCHED_GETAFFINITY) && defined(CPU_COUNT)
+  cpu_set_t cs;
+  if (!sched_getaffinity(0, sizeof cs, &cs) && CPU_COUNT(&cs) > 0)
+    return (long) CPU_COUNT(&cs);
+#endif
+  n = sysconf(_SC_NPROCESSORS_ONLN);
   return n > 0 ? n : 1;
 #else
   return 1;
 #endif
 }
 
-/*  Available memory, including reclaimable cache.  Zero if unknown.  */
-
 static bytes_t blr_avail(void) {
 #if defined(BLR_WIN_LEGACY)
-  /*  GlobalMemoryStatusEx is NT-only; the 32-bit fields suffice here.  */
   MEMORYSTATUS ms;
   ms.dwLength = sizeof ms;
   GlobalMemoryStatus(&ms);
@@ -318,7 +328,9 @@ static bytes_t blr_avail(void) {
   unsigned long kb = 0;
   if (f) {
     while (fgets(line, (int) sizeof line, f))
-      if (!strncmp(line, "MemAvailable:", 13)) { kb = strtoul(line + 13, NULL, 10);  break; }
+      if (!strncmp(line, "MemAvailable:", 13)) {
+        kb = strtoul(line + 13, NULL, 10);  break;
+      }
     fclose(f);
   }
   if (kb) return (bytes_t) kb * 1024;
@@ -331,7 +343,6 @@ static bytes_t blr_avail(void) {
 }
 
 #if defined(BLR_DOS)
-/*  DOS replaces the extension and uses .opu for decoded Opus.  */
 static char * out_name(int enc, const char * in) {
   sz n = strlen(in), stem;
   const char * dot = strrchr(in, '.'), * sep = strrchr(in, '/');
@@ -342,7 +353,8 @@ static char * out_name(int enc, const char * in) {
   stem = dot && (!sep || dot > sep) ? (sz) (dot - in) : n;
   s = xmalloc(stem + 5);
   memcpy(s, in, stem);
-  strcpy(s + stem, enc ? ".blr" : arc_is_opus(in) ? ".opu" : ".ogg");
+  strcpy(s + stem, enc ? ".blr" : arc_is_opus(in) ? ".opu"
+                  : mp3_is_archive(in) ? ".mp3" : ".ogg");
   return s;
 }
 #else
@@ -366,11 +378,9 @@ static int by_size_desc(const void * a, const void * b) {
   return x->order < y->order ? -1 : x->order > y->order;
 }
 
-/*  POSIX forks, Windows re-executes, and other hosts run serially.  */
-
 typedef struct {
-  const char * self;          /*  argv[0], for re-execution  */
-  const char * lev;           /*  "-N"  */
+  const char * self;
+  const char * lev;
   int enc, jobs, live, bad, status;
 #if defined(BLR_WIN32)
   HANDLE h[MAXIMUM_WAIT_OBJECTS];
@@ -397,7 +407,6 @@ static void pool_reap(pool * p) {
   p->h[i] = p->h[--p->live];
 }
 
-/*  Quote an argument for the Windows C runtime.  */
 static char * winquote(const char * s) {
   sz n = strlen(s), i, k = 0, bs;
   FATAL_UNLESS(n <= (SIZE_MAX - 3) / 2, "path is too long");
@@ -406,30 +415,32 @@ static char * winquote(const char * s) {
   Fi(n,
     for (bs = 0; i < n && s[i] == '\\'; i++) bs++;
     if (i == n) { while (bs--) { q[k++] = '\\';  q[k++] = '\\'; }  break; }
-    if (s[i] == '"') { while (bs--) { q[k++] = '\\';  q[k++] = '\\'; }  q[k++] = '\\'; }
-    else while (bs--) q[k++] = '\\';
+    if (s[i] == '"') {
+      while (bs--) { q[k++] = '\\';  q[k++] = '\\'; }
+      q[k++] = '\\';
+    } else while (bs--) q[k++] = '\\';
     q[k++] = s[i]);
   q[k++] = '"';  q[k] = 0;
   return q;
 }
 
-/*  Re-execute this image for one file.  */
 static void pool_spawn(pool * p, const char * in, const char * out,
-                       const vb_opt * o, const effort * e) {
-  char * qin = winquote(in), * qout = winquote(out), * qself = winquote(p->self);
-  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) + 56);
+                       int level) {
+  char * qin = winquote(in), * qout = winquote(out),
+       * qself = winquote(p->self);
+  char * cmd = xmalloc(strlen(qself) + strlen(qin) + strlen(qout) +
+                       strlen(p->lev) + 80);
   PROCESS_INFORMATION pi;
   BOOL ok;
   if (p->jobs > MAXIMUM_WAIT_OBJECTS) p->jobs = MAXIMUM_WAIT_OBJECTS;
   while (p->live >= p->jobs) pool_reap(p);
   sprintf(cmd, "%s %s %s %s -- %s %s %s", qself, p->lev,
           blr_progress_enabled ? "--progress-lines" : "",
-          blr_no_mmap ? "--no-mmap" : "",
-          p->enc ? "e" : "d", qin, qout);
+          blr_no_mmap ? "--no-mmap" : "", p->enc ? "e" : "d", qin, qout);
   ok = blr_win_spawn(p->self, cmd, &pi);
-  free(qin);  free(qout);  free(qself);  free(cmd);
-  if (!ok) {                    /*  cannot spawn: run it here instead  */
-    pool_failed(p, do_one(p->enc, in, out, o, e));
+  xfree(qin);  xfree(qout);  xfree(qself);  xfree(cmd);
+  if (!ok) {
+    pool_failed(p, do_one(p->enc, in, out, level));
     return;
   }
   CloseHandle(pi.hThread);
@@ -448,14 +459,14 @@ static void pool_reap(pool * p) {
 }
 
 static void pool_spawn(pool * p, const char * in, const char * out,
-                       const vb_opt * o, const effort * e) {
+                       int level) {
   pid_t c;
   while (p->live >= p->jobs) pool_reap(p);
   c = fork();
-  if (c < 0) {                  /*  out of processes: run it here instead  */
-    pool_failed(p, do_one(p->enc, in, out, o, e));
+  if (c < 0) {
+    pool_failed(p, do_one(p->enc, in, out, level));
   } else if (!c) {
-    int rc = do_one(p->enc, in, out, o, e);
+    int rc = do_one(p->enc, in, out, level);
     _exit(rc);
   } else p->live++;
 }
@@ -465,18 +476,27 @@ static void pool_spawn(pool * p, const char * in, const char * out,
 static void pool_reap(pool * p) { p->live = 0; }
 
 static void pool_spawn(pool * p, const char * in, const char * out,
-                       const vb_opt * o, const effort * e) {
-  pool_failed(p, do_one(p->enc, in, out, o, e));
+                       int level) {
+  pool_failed(p, do_one(p->enc, in, out, level));
 }
 
 #endif
 
+static long jobs_for(bytes_t big) {
+  bytes_t fixed = BLR_JOB_FIXED + (blr_acm ? BLR_JOB_ACM : 0);
+  bytes_t per = big > (ULLONG_MAX - fixed) / 3
+                  ? ULLONG_MAX : fixed + 3 * big;
+  long n = blr_cores();
+  bytes_t avail = blr_avail();
+  if (avail && avail / per < (bytes_t) n) n = (long) (avail / per);
+  return n < 1 ? 1 : n;
+}
+
 static int do_batch(int enc, const char * self, const char * lev,
-                    yarg_result * r, const vb_opt * o, const effort * e,
+                    yarg_result * r, int level,
                     int jobs) {
   int n = r->pos_argc - 1, i;
   bytes_t big = 0;
-  bytes_t avail;
   job * q = xmalloc((sz) (n > 0 ? n : 1) * sizeof *q);
   pool p;
   Fi(n,
@@ -484,15 +504,7 @@ static int do_batch(int enc, const char * self, const char * lev,
     q[i].order = i;  q[i].size = file_size(q[i].name);
     if (q[i].size > big) big = q[i].size);
   qsort(q, (sz) n, sizeof *q, by_size_desc);
-  if (!jobs) {
-    bytes_t per = big > (ULLONG_MAX - BLR_JOB_FIXED) / 3
-                    ? ULLONG_MAX : BLR_JOB_FIXED + 3 * big;
-    long by_mem = blr_cores();
-    avail = blr_avail();
-    if (avail && avail / per < (bytes_t) by_mem) by_mem = (long) (avail / per);
-    if (by_mem < 1) by_mem = 1;
-    jobs = (int) by_mem;
-  }
+  if (!jobs) jobs = (int) jobs_for(big);
   if (jobs < 1) jobs = 1;
   if (jobs > n) jobs = n;
   fprintf(stderr, "balrogg: %d file%s, %d job%s\n",
@@ -501,10 +513,10 @@ static int do_batch(int enc, const char * self, const char * lev,
   p.live = 0;  p.bad = 0;  p.status = BLR_EXIT_OK;
   Fi(n,
     char * out = out_name(enc, q[i].name);
-    pool_spawn(&p, q[i].name, out, o, e);
-    free(out));
+    pool_spawn(&p, q[i].name, out, level);
+    xfree(out));
   while (p.live > 0) pool_reap(&p);
-  free(q);
+  xfree(q);
   if (p.bad) fprintf(stderr, "balrogg: %d of %d failed\n", p.bad, n);
   return p.status;
 }
@@ -522,7 +534,6 @@ static int parse_jobs(const char * s, int * jobs) {
 
 int main(int argc, char ** argv) {
   const char * verb, * in = NULL, * out = NULL;
-  vb_opt o;
   yarg_options opt[] = {
     { 'h', no_argument, "help" },
     { 'v', no_argument, "version" },
@@ -540,14 +551,12 @@ int main(int argc, char ** argv) {
   };
   yarg_settings set;
   yarg_result * r;
-  const effort * e;
-  char lev[3];
-  int i, level = 4, np, batch = 0, jobs = 0, rc = 0;
+  char lev[8];
+  int i, k, level = BLR_DEFLEV, np, batch = 0, jobs = 0, rc = 0;
 
   set.dash_dash = true;
   set.style = YARG_STYLE_UNIX;
 
-  /*  Batch children inherit this per-file cap.  */
   blr_memcap();
 
 #ifdef BLR_PROFILE
@@ -555,6 +564,21 @@ int main(int argc, char ** argv) {
     if (pd) { prof_open(pd);  rc_hook_set(prof_hook, NULL);
               atexit(prof_close); } }
 #endif
+
+  for (i = k = 1; i < argc; i++) {
+    const char * a = argv[i];
+    if (!strcmp(a, "--")) { while (i < argc) argv[k++] = argv[i++];  break; }
+    if (a[0] == '-' && a[1] >= '0' && a[1] <= '9' &&
+        strspn(a + 1, "0123456789") == strlen(a + 1)) {
+      level = strlen(a + 1) <= 2 ? atoi(a + 1) : 0;
+      if (level < 1 || level > BLR_NLEV) {
+        fprintf(stderr, "balrogg: no level %s; levels are -1 to -%d\n", a,
+                BLR_NLEV);
+        return BLR_EXIT_USAGE;
+      }
+    } else argv[k++] = argv[i];
+  }
+  argc = k;
 
   r = yarg_parse(argc, argv, opt, set);
   if (!r || r->error) {
@@ -582,15 +606,11 @@ int main(int argc, char ** argv) {
   verb = r->pos_args[0];
   if (np > 1) in = r->pos_args[1];
   if (np > 2) out = r->pos_args[2];
-  np--;                                 /*  the verb is not a file  */
+  np--;
 
-  e = EFFORT + (level - 1);
-  lev[0] = '-';  lev[1] = (char) ('0' + level);  lev[2] = 0;
-  vb_opt_default(&o);
-  o.flags = (u8) ((o.flags & 0x1F) | (e->vidx << 5));
-  o.search = e->search;
+  sprintf(lev, "-%d", level);
+  blr_acm = level_acm(level);
 
-  /*  Free parsed arguments through one exit path.  */
   if (batch) {
     if (blr_progress_enabled) blr_progress_enabled = 2;
     if (np < 1 || (strcmp(verb, "e") && strcmp(verb, "d")))
@@ -598,28 +618,21 @@ int main(int argc, char ** argv) {
     else {
       const char * self = argv[0];
 #if defined(BLR_WIN32)
-      /*  argv[0] is whatever the shell typed; children need the image.  */
       char * image = blr_win_image();
       if (image) self = image;
 #endif
-      rc = do_batch(!strcmp(verb, "e"), self, lev, r, &o, e, jobs);
+      rc = do_batch(!strcmp(verb, "e"), self, lev, r, level, jobs);
 #if defined(BLR_WIN32)
-      free(image);
+      xfree(image);
 #endif
     }
   }
-  else if (!strcmp(verb, "dump") && np == 1) dump(in);
-  else if (!strcmp(verb, "pages") && np == 1) pages(in);
-  else if (!strcmp(verb, "e") && np == 2) rc = do_one(1, in, out, &o, e);
-  else if (!strcmp(verb, "d") && np == 2) rc = do_one(0, in, out, &o, e);
-  else if (strcmp(verb, "e") && strcmp(verb, "d") && strcmp(verb, "dump")
-           && strcmp(verb, "pages")) {
+  else if (strcmp(verb, "e") && strcmp(verb, "d")) {
     fprintf(stderr, "balrogg: unknown command '%s'\n", verb);
     usage(stderr);  rc = BLR_EXIT_USAGE;
-  } else {
-    fprintf(stderr, "balrogg: '%s' takes %s\n", verb,
-            strcmp(verb, "e") && strcmp(verb, "d") ? "one file"
-                                                   : "an input and an output");
+  } else if (np == 2) rc = do_one(!strcmp(verb, "e"), in, out, level);
+  else {
+    fprintf(stderr, "balrogg: '%s' takes an input and an output\n", verb);
     usage(stderr);  rc = BLR_EXIT_USAGE;
   }
   yarg_destroy(r);
