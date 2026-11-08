@@ -2,17 +2,7 @@
 """Re-page an Ogg file, or mutate one and look for silent mismatches.
 
     mutate.py repage IN OUT MAXBODY [flush|mix|all]
-    mutate.py fuzz BALROGG FILE ITERATIONS SEED
-
-`repage` lays the packets out again with at most MAXBODY payload bytes per
-page, so larger packets continue across pages; the header mode says whether
-each header packet gets a page of its own (flush), whether the setup header
-shares a page with the first audio packets (mix), or whether everything
-starts on the first page (all).  `fuzz` damages one page at a time, keeps the
-CRC valid, and reports every input that both directions accept but that does
-not come back byte for byte.  A refusal is the expected outcome for most
-mutations; a mismatch is a bug.
-"""
+    mutate.py fuzz BALROGG FILE ITERATIONS SEED"""
 
 import os, random, struct, subprocess, sys
 

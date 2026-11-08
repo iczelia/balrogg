@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""Convert Ogg files to length-prefixed packet seeds for fuzz_ogg.
-
-Continued packets are joined across pages.
-"""
 
 import sys, os, struct
 
