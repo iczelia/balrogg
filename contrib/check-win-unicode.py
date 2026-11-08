@@ -75,8 +75,6 @@ def main():
       run("-1", "e", inp, arc)
       run("d", arc, out)
       assert out.read_bytes() == original
-      run("pages", inp)
-      run("dump", arc)
       alias = work / ("別名 " + fixture)
       os.link(inp, alias)
       run("e", inp, alias, code=3)

@@ -62,12 +62,13 @@ if grep -Eq 'GetFileInformationByHandleEx|GetFileSizeEx|'\
   exit 1
 fi
 
-#  Allowed runtime, mapping, batch and profiler imports.
-allowed=' CloseHandle CreateDirectoryA CreateFileA CreateFileMappingA CreateProcessA ExitProcess
+#  Allowed runtime, mapping, batch, trial-thread and profiler imports.
+allowed=' CloseHandle CreateDirectoryA CreateFileA CreateFileMappingA CreateProcessA DeleteFileA ExitProcess
+CreateThread InterlockedExchange Sleep
 FlushFileBuffers FlushViewOfFile MapViewOfFile UnmapViewOfFile
 GetCommandLineA GetEnvironmentVariableA GetExitCodeProcess
 FlushConsoleInputBuffer GetConsoleMode GetConsoleScreenBufferInfo
-GetFileAttributesA GetFileInformationByHandle GetFileSize GetLastError
+GetFileAttributesA GetFileInformationByHandle GetFileSize GetFileType GetLastError
 GetModuleFileNameA GetProcessHeap GetStdHandle GetSystemInfo
 GlobalMemoryStatus HeapAlloc HeapFree HeapReAlloc ReadFile
 ReadConsoleInputA SetEndOfFile SetFilePointer SetLastError
@@ -82,8 +83,8 @@ for sym in `awk '$2 == "<none>" {print $4}' "$tmp.k32"`; do
     exit 1
   fi
 done
-if grep -Eq '^#define HAVE_(SSE2|AVX2)' "$config"; then
-  echo 'win95-check: a vector mixer is compiled in' >&2
+if grep -Eq '^#define HAVE_(SSE2|AVX2|SSE42)' "$config"; then
+  echo 'win95-check: a vector mixer or CRC is compiled in' >&2
   exit 1
 fi
 if test "`grep -ci 'DLL Name:' "$tmp"`" -ne 1 ||
