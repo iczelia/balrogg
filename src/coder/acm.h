@@ -39,7 +39,7 @@ typedef struct {
 } acm_dec;
 
 void acm_prepare(void);
-enum { ACM_VORBIS, ACM_OPUS, ACM_VLITE, ACM_OPUSG, ACM_VORBISG, ACM_MODX };
+enum { ACM_VORBIS, ACM_OPUS, ACM_VLITE, ACM_OPUSG, ACM_VORBISG };
 #define ACM_W16   0x100
 #define ACM_APMS  0x200
 acm * acm_new(int prof);

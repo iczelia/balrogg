@@ -673,16 +673,18 @@ static void t_mod(void) {
     ok = mod_kind(b, n, n) == (v == 5 ? 15 : 31);
     CHECK(ok, "synthetic module %d is recognised", v);
     if (!ok) continue;
-    for (cfg = MOD_CFG0; cfg < MOD_CFG0 + 256; cfg++) {
-      if (!mod_config(cfg)) continue;
-      al = mod_code(b, n, cfg, &a);
+    for (cfg = MOD_CFG0; cfg < MOD_SCFG0 + 100; cfg++) {
+      int pc = cfg < MOD_SCFG0 ? cfg : MOD_CFG0 + 1,
+          sc = cfg < MOD_SCFG0 ? MOD_SCFG0 : cfg;
+      if (!mod_config(pc) || !mod_sconfig(sc)) continue;
+      al = mod_code(b, n, pc, sc, &a);
       memset(o, 0xA5, n);
-      CHECK(!mod_decode(a, al, n, cfg, o) && !memcmp(o, b, n),
+      CHECK(!mod_decode(a, al, n, pc, o) && !memcmp(o, b, n),
             "synthetic module %d round-trips with configuration %d", v, cfg);
       Fi(3,
         memcpy(o, a, al);
         o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
-        (void) mod_decode(o, al, n, cfg, w));
+        (void) mod_decode(o, al, n, pc, w));
       xfree(a);
     }
   }

@@ -24,6 +24,7 @@
 #define MOD_MAXN   ((sz) 1 << 30)
 #define MOD_NSEMI  97
 #define MOD_CFG0   500
+#define MOD_SCFG0  600
 
 typedef struct {
   int ns, ch, tag;
@@ -53,14 +54,16 @@ int mod_semi(u32 period);
 u32 mod_semi_lo(int s);
 u32 mod_semi_hi(int s);
 
-sz mod_code(const u8 * b, sz n, int cfg, u8 ** out);
+sz mod_code(const u8 * b, sz n, int cfg, int scfg, u8 ** out);
 int mod_decode(const u8 * a, sz alen, sz n, int cfg, u8 * out);
 
 int mod_config(int cfg);
+int mod_sconfig(int scfg);
 int mod_sniff(const char * path);
 int mod_is_archive(const char * path);
 int mod_level_cfg(int level);
-int mod_pack(const char * in, const char * out, int cfg);
+int mod_level_scfg(int level);
+int mod_pack(const char * in, const char * out, int cfg, int scfg);
 int mod_unpack(const char * in, const char * out);
 
 #endif

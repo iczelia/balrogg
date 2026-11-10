@@ -32,21 +32,10 @@ typedef struct {
 
 #define FLIM 30
 
-static INLINE int fbit(mx * m, u32 * s, int bit) {
-  bit = mx_bit(m, bit, rc_packed_prob(*s));
-  *s = rc_adapt_packed(*s, FLIM, bit);
-  return bit;
-}
+static INLINE int fbit(mx * m, u32 * s, int bit) { return pbit(m, s, FLIM, bit); }
 
 static u32 ftree(mx * m, u32 * t, u32 tn, u32 v, u32 n) {
-  u32 lo = 0, hi = n, node = 1;
-  while (hi - lo > 1) {
-    u32 mid = lo + (hi - lo) / 2;
-    int bit = fbit(m, t + (node & (tn - 1)), v >= mid);
-    if (bit) lo = mid; else hi = mid;
-    node = node * 2 + (u32) bit;
-  }
-  return lo;
+  return ptree(m, t, tn, FLIM, v, n);
 }
 
 static u32 raw(const u8 * c) { return rd32be(c); }

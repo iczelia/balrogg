@@ -273,7 +273,7 @@ static int code_one(int enc, const char * in, const char * out,
   case F_MP3:
     return mp3_pack(in, out, mp3_level_cfg(level));
   case F_MOD:
-    return mod_pack(in, out, mod_level_cfg(level));
+    return mod_pack(in, out, mod_level_cfg(level), mod_level_scfg(level));
   case F_UNKNOWN:
     fprintf(stderr, "balrogg: %s is not Ogg Vorbis, Ogg Opus, MP3 or MOD\n", in);
     return BLR_EXIT_REFUSED;

@@ -49,7 +49,7 @@ struct acm {
   u16 * a[3];
   acm_coder code;  void * cctx;
   int lrmin, lr2, apw, flim, conf;
-  int lite, sel8;
+  int lite;
   int w16;
   u8 eng[ACM_NTY], cap[ACM_NTY];
   acm_dec d;
@@ -152,10 +152,8 @@ acm * acm_new(int prof) {
       q->lrmin = 132;  q->lr2 = 104;  q->apw = 75;  q->conf = GATEN;
     }
     if (prof == ACM_VLITE) { q->lrmin = 264;  q->lr2 = 208;  q->apw = 100; }
-    if (prof == ACM_MODX) { q->lrmin = 132;  q->lr2 = 104;  q->apw = 75; }
   }
-  q->lite = prof == ACM_VLITE || prof == ACM_MODX;
-  q->sel8 = prof == ACM_MODX;
+  q->lite = prof == ACM_VLITE;
   tb = (sz) 1 << (q->lite ? LTBITS : TBITS);
   mr = q->lite ? LMROWS : MROWS;  ar = q->lite ? LAROWS : AROWS;
   if (!apms) {
@@ -174,7 +172,7 @@ acm * acm_new(int prof) {
       Fi((sz) ACM_NSEL * mr, q->w1[i * NIN] = 65536);
     }
     q->w1n = xcalloc((sz) ACM_NSEL * mr, sizeof *q->w1n);
-    ns = q->lite && !q->sel8 ? ACM_NLSEL : ACM_NSEL;
+    ns = q->lite ? ACM_NLSEL : ACM_NSEL;
     q->w2 = w2new(mr, ns);
   }
   { u16 row[33];
@@ -395,8 +393,6 @@ int acm_bit(acm * q, int bit, u32 p1, acm_h node) {
         ? bit_k(q, bit, p1, node, ACM_NLSEL, 2, TBITS, MROWS, AROWS, 1)
         : bit_k(q, bit, p1, node, ACM_NLSEL, 2, TBITS, MROWS, AROWS, 0);
   }
-  if (q->sel8)
-    return bit_k(q, bit, p1, node, ACM_NSEL, 2, LTBITS, LMROWS, LAROWS, 0);
   return q->lite
     ? bit_k(q, bit, p1, node, ACM_NLSEL, 2, LTBITS, LMROWS, LAROWS, 0)
     : q->w16 ? bit_k(q, bit, p1, node, ACM_NSEL, 3, TBITS, MROWS, AROWS, 1)

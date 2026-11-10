@@ -27,14 +27,25 @@ static const u16 EXT[60] = {
 };
 
 static const mcfg CFG[] = {
-  [1] = { PE_FAST, 0 },
-  [20] = { PE_CM, 384 },  [21] = { PE_CM, 387 },  [23] = { PE_CM, 15 },
-  [24] = { PE_CM, 127 },
-  [40] = { PE_X, 0x400 },  [41] = { PE_X, 0x2a },  [42] = { PE_X, 0x4a },
-  [43] = { PE_X, 0x0a },  [44] = { PE_X, 0x08 },  [47] = { PE_X, 0x108 },
-  [48] = { PE_X, 0x105 },  [49] = { PE_X, 0x205 },
+  [1] = { PE_FAST, 0 },  [20] = { PE_CM, 384 },  [23] = { PE_CM, 15 },
 };
 #define NCFG ((int) ARRAY_LEN(CFG))
+
+static const scfgt SCFG[] = {
+  [2] = { SE_FAST, 1 },  [4] = { SE_FAST, 3 },  [6] = { SE_FAST, 5 },
+  [7] = { SE_FAST, 6 },  [9] = { SE_FAST, 8 },  [10] = { SE_FAST, 9 },
+  [11] = { SE_FAST, 10 },  [12] = { SE_FAST, 11 },
+  [31] = { SE_LS, 0x14033a88 },  [33] = { SE_LS, 0x14034318 },
+  [34] = { SE_LS, 0x14034320 },  [36] = { SE_LS, 0x89bc320 },
+  [37] = { SE_LS, 0x13fc320 },  [38] = { SE_LS, 0x17fc43c },
+  [40] = { SE_LS, 0x17fc450 },  [41] = { SE_LS, 0x17fc3d0 },
+};
+#define NSCFG ((int) ARRAY_LEN(SCFG))
+
+int mod_sconfig(int scfg) {
+  scfg -= MOD_SCFG0;
+  return scfg >= 0 && scfg < NSCFG && SCFG[scfg].se != SE_NONE;
+}
 
 int mod_config(int cfg) {
   cfg -= MOD_CFG0;
@@ -192,21 +203,36 @@ void mt_next(mtrk * t, const mx * m, int c, sz i, sz pr) {
     t->mt[chash(ckey(m, i - rowc), ckey(m, i), t->mb)] = (u32) (i + rowc + 1);
 }
 
+void rt_init(rtrk * t, sz ncell, sz rowc) {
+  t->rowc = rowc;  t->rp = NOC;  t->rml = 0;  t->rok = 1;
+  t->mb = CLAMP((int) blr_ilog((u32) ncell) + 1, 8, 22);
+  t->rt = xcalloc((sz) 1 << t->mb, sizeof *t->rt);
+}
+
+void rt_row(rtrk * t, const mx * m, sz i) {
+  u32 hk = 0, k;
+  if (i % t->rowc || i < t->rowc) return;
+  for (k = 0; k < (u32) t->rowc; k++)
+    hk = chash(hk, ckey(m, i - t->rowc + k), 32);
+  hk >>= 32 - t->mb;
+  if (t->rp != NOC && t->rok) { t->rp += t->rowc;  t->rml++; }
+  else { t->rp = t->rt[hk] ? t->rt[hk] - 1 : NOC;  t->rml = 0; }
+  t->rt[hk] = (u32) i + 1;
+  t->rok = 1;
+}
+
 static void init(mx * m, int dec, u8 * h, int cfg) {
-  int i, full;
+  int i;
   memset(m, 0, sizeof *m);
   m->tm[0] = now();
   m->dec = dec;  m->h = h;  m->cf = &CFG[cfg - MOD_CFG0];
-  full = m->cf->pe == PE_X;
-  m->q = acm_new(full ? ACM_VLITE : ACM_VLITE | ACM_APMS);
+  m->q = acm_new(ACM_VLITE | ACM_APMS);
   m->d = acm_d(m->q);
   acm_bind(m->q, rc_cb, m);
   acm_class(m->q, T_HDR, ACM_EAPM, 0);
-  if (!full) {
-    acm_class(m->q, T_KIND, ACM_EAPM, 0);
-    acm_class(m->q, T_SNUM, ACM_EAPM, 0);
-    acm_class(m->q, T_TAIL, ACM_EAPM, 0);
-  }
+  acm_class(m->q, T_KIND, ACM_EAPM, 0);
+  acm_class(m->q, T_SNUM, ACM_EAPM, 0);
+  acm_class(m->q, T_TAIL, ACM_EAPM, 0);
   Fi(60, { int s = mod_semi(EXT[i]);  if (!m->std[s]) m->std[s] = EXT[i]; });
 }
 
@@ -231,6 +257,28 @@ static void rest(mx * m) {
   }
 }
 
+static void samples(mx * m) {
+  const mod_lay * L = &m->L;
+  const int ls = m->sc->se == SE_LS;
+  void * st;
+  int i;
+  m->tm[3] = now();
+  st = ls ? smp_ls_new(m) : smp_fast_new(m);
+  m->ty = T_PCM;
+  Fi(L->ns,
+    const u8 * src = m->in ? m->in + L->sat[i] : NULL;
+    u8 * dst = m->out ? m->out + L->sat[i] : NULL;
+    double c0 = m->cost[T_PCM];
+    if (!L->slen[i]) continue;
+    if (ls) smp_ls_one(m, st, i, src, dst, L->slen[i]);
+    else smp_fast_one(m, st, i, src, dst, L->slen[i]);
+    if (!m->dec && getenv("BLR_MOD_STATS"))
+      fprintf(stderr, "modsmp %d %lu %.1f\n", i, (unsigned long) L->slen[i],
+              m->cost[T_PCM] - c0));
+  if (ls) smp_ls_free(st);
+  else smp_fast_free(st);
+}
+
 static void body(mx * m) {
   sz nc = m->L.ncell + 1;
   m->nt = xmalloc(nc);  m->sm = xmalloc(nc);
@@ -238,22 +286,25 @@ static void body(mx * m) {
   MARK(m, 0);
   switch (m->cf->pe) {
   case PE_FAST: pat_fast(m);  break;
-  case PE_CM: pat_cm(m);  break;
-  default: pat_x(m);
+  default: pat_cm(m);
   }
   rest(m);
+  MARK(m, 2);
+  samples(m);
   MARK(m, 3);
 }
 
-sz mod_code(const u8 * b, sz n, int cfg, u8 ** out) {
+sz mod_code(const u8 * b, sz n, int cfg, int scfg, u8 ** out) {
   mx * m = xmalloc(sizeof *m);
   u8 h[MOD_HDR31];
   int ns = mod_kind(b, n, n);
-  sz len, raw;
-  FATAL_UNLESS(ns && mod_config(cfg), "internal: not a MOD");
+  sz len;
+  FATAL_UNLESS(ns && mod_config(cfg) && mod_sconfig(scfg),
+               "internal: not a MOD");
   memset(h, 0, sizeof h);
   memcpy(h, b, ns == 31 ? MOD_HDR31 : MOD_HDR15);
   init(m, 0, h, cfg);
+  m->sc = &SCFG[scfg - MOD_SCFG0];
   rc_enc_init(&m->e);
   m->in = b;
   mod_layout(&m->L, b, ns, 0, n);
@@ -266,24 +317,24 @@ sz mod_code(const u8 * b, sz n, int cfg, u8 ** out) {
     fprintf(stderr, "modstats %lu %lu %lu %lu %lu %lu\n", (unsigned long) n,
             (unsigned long) m->mark[0], (unsigned long) (m->mark[1] - m->mark[0]),
             (unsigned long) (m->L.tail - m->L.smp),
-            (unsigned long) (m->mark[3] - m->mark[1]),
+            (unsigned long) (m->mark[2] - m->mark[1]),
             (unsigned long) m->mark[4]);
   if (getenv("BLR_MOD_STATS")) {
     int k;
-    fprintf(stderr, "modtime %.6f %.6f %.6f\n", m->tm[1] - m->tm[0],
-            m->tm[2] - m->tm[1], now() - m->tm[2]);
+    fprintf(stderr, "modtime %.6f %.6f %.6f %.6f\n", m->tm[1] - m->tm[0],
+            m->tm[2] - m->tm[1], (m->tm[3] ? m->tm[3] : now()) - m->tm[2],
+            m->tm[3] ? now() - m->tm[3] : 0.0);
     fprintf(stderr, "modcost");
     for (k = 0; k < 16; k++) fprintf(stderr, " %.0f", m->cost[k] / 8);
     for (k = 0; k < 4; k++) fprintf(stderr, " %.0f", m->ccost[k] / 8);
     fprintf(stderr, "\n");
   }
   len = rc_enc_finish(&m->e);
-  raw = m->L.tail - m->L.smp;
-  *out = xmalloc(4 + len + raw);
-  wr32le(*out, (u32) len);
-  memcpy(*out + 4, rc_enc_data(&m->e), len);
-  memcpy(*out + 4 + len, b + m->L.smp, raw);
-  len += 4 + raw;
+  *out = xmalloc(5 + len);
+  (*out)[0] = (u8) (scfg - MOD_SCFG0);
+  wr32le(*out + 1, (u32) len);
+  memcpy(*out + 5, rc_enc_data(&m->e), len);
+  len += 5;
   rc_enc_free(&m->e);
   finish(m);
   xfree(m);
@@ -294,20 +345,22 @@ int mod_decode(const u8 * a, sz alen, sz n, int cfg, u8 * out) {
   mx * m;
   u8 h[MOD_HDR31];
   int bad = 0;
-  sz cl = alen >= 4 ? rd32le(a) : 0;
-  if (alen < 4 || cl > alen - 4 || !mod_config(cfg)) return -1;
+  sz cl = alen >= 5 ? rd32le(a + 1) : 0;
+  int scfg = alen >= 5 ? MOD_SCFG0 + a[0] : 0;
+  if (alen < 5 || cl > alen - 5 || !mod_config(cfg) || !mod_sconfig(scfg))
+    return -1;
   m = xmalloc(sizeof *m);
   memset(h, 0, sizeof h);
   init(m, 1, h, cfg);
-  rc_dec_init(&m->r, a + 4, cl);
+  m->sc = &SCFG[scfg - MOD_SCFG0];
+  rc_dec_init(&m->r, a + 5, cl);
   m->out = out;
   m->L.ns = 31;
   if (frame(m, n) || alphabet(m)) bad = 1;
   else {
     memcpy(out, h, m->L.hdr);
     body(m);
-    if (rc_dec_spent(&m->r) || alen - 4 - cl != m->L.tail - m->L.smp) bad = 1;
-    else memcpy(out + m->L.smp, a + 4 + cl, m->L.tail - m->L.smp);
+    if (rc_dec_spent(&m->r) || alen - 5 != cl) bad = 1;
   }
   finish(m);
   xfree(m);

@@ -46,7 +46,8 @@ BLR_OPUS_PARSE = \
   src/opus/parse/silk_tables_nlsf_wb.c src/opus/parse/silk_tables_other.c src/opus/parse/silk_tables_pitch.c \
   src/opus/parse/silk_tables_pulses.c
 BLR_MOD = src/mod/mod.c src/mod/lay.c src/mod/code.c src/mod/patfast.c \
-  src/mod/patcm.c src/mod/patx.c src/mod/lstm.c src/mod/lstmw.c
+  src/mod/patcm.c src/mod/smpfast.c src/mod/smpls.c \
+  src/mod/lstm.c src/mod/lstmw.c
 BLR_SOURCES = $(BLR_SYS) $(BLR_CODER) $(BLR_FMT) $(BLR_VORBIS) $(BLR_OPUS) $(BLR_MP3) $(BLR_MOD) $(BLR_OPUS_PARSE)
 if BLR_IS_WINDOWS
 BLR_SOURCES += src/sys/win32.c
@@ -61,7 +62,7 @@ noinst_HEADERS = \
   src/opus/opus.h src/opus/acm.h src/opus/cwrs.h src/opus/ent.h \
   src/mp3/mp3.h src/mp3/z.h src/mp3/zbase.h src/mp3/zc.h src/mp3/zcoef.h src/mp3/zframe.h src/mp3/zhdr.h \
   src/mp3/zlayer.h src/mp3/zmframe.h src/mp3/zmodel.h src/mp3/znames.h src/mp3/zrc.h src/mp3/ztab.h \
-  src/mod/mod.h src/mod/mi.h src/mod/lstm.h src/mod/patxw.h \
+  src/mod/mod.h src/mod/mi.h src/mod/lstm.h \
   src/opus/parse/opusdec.h src/opus/parse/celt.h src/opus/parse/silk.h src/opus/parse/arch.h \
   src/opus/parse/opus_types.h src/opus/parse/opus_defines.h src/opus/parse/os_support.h \
   src/opus/parse/ecintrin.h src/opus/parse/entcode.h src/opus/parse/entdec.h \

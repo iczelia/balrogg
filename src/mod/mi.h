@@ -23,15 +23,20 @@
 #include <time.h>
 
 enum {
-  T_KIND, T_HDR, T_SNUM, T_NOTE, T_PITCH, T_PIDX, T_SMP, T_EFF, T_PAR, T_TAIL
+  T_KIND, T_HDR, T_SNUM, T_NOTE, T_PITCH, T_PIDX, T_SMP, T_EFF, T_PAR, T_TAIL,
+  T_PCM
 };
 
 
 #define NSYM (MOD_NSEMI + 1)
 #define NOC  ((sz) -1)
-enum { PE_NONE, PE_FAST, PE_CM, PE_X };
+enum { PE_NONE, PE_FAST, PE_CM };
 
 typedef struct { u8 pe;  u32 opt; } mcfg;
+
+enum { SE_NONE, SE_FAST, SE_LS };
+
+typedef struct { u8 se;  u32 opt; } scfgt;
 
 typedef struct mx {
   acm * q;
@@ -40,6 +45,7 @@ typedef struct mx {
   rc_dec r;
   int dec;
   const mcfg * cf;
+  const scfgt * sc;
   int ty;
   u8 * h;
   const u8 * in;
@@ -125,6 +131,23 @@ static INLINE void cell_put(mx * m, sz i, u32 per, u32 sym, u32 smp, u32 eff,
   d[2] = (u8) ((smp & 15) << 4 | eff);  d[3] = (u8) par;
 }
 
+static INLINE int pbit(mx * m, u32 * s, int lim, int bit) {
+  bit = mx_bit(m, bit, rc_packed_prob(*s));
+  *s = rc_adapt_packed(*s, lim, bit);
+  return bit;
+}
+
+static INLINE u32 ptree(mx * m, u32 * t, u32 tn, int lim, u32 v, u32 n) {
+  u32 lo = 0, hi = n, node = 1;
+  while (hi - lo > 1) {
+    u32 mid = lo + (hi - lo) / 2;
+    int bit = pbit(m, t + (node & (tn - 1)), lim, v >= mid);
+    if (bit) lo = mid; else hi = mid;
+    node = node * 2 + (u32) bit;
+  }
+  return lo;
+}
+
 typedef struct { sz * mp, rowc;  u32 * mt, * ml;  int mb; } mtrk;
 void mt_init(mtrk * t, sz ncell, sz rowc);
 void mt_free(mtrk * t);
@@ -133,8 +156,25 @@ static INLINE sz mt_pred(const mtrk * t, int c, sz i) {
   return t->mp[c] < i ? t->mp[c] : NOC;
 }
 
+typedef struct { u32 * rt, rml;  sz rp, rowc;  int mb, rok; } rtrk;
+void rt_init(rtrk * t, sz ncell, sz rowc);
+void rt_row(rtrk * t, const mx * m, sz i);
+static INLINE sz rt_pred(const rtrk * t, int c, sz i) {
+  return t->rp != NOC && t->rp + (sz) c < i ? t->rp + (sz) c : NOC;
+}
+static INLINE void rt_next(rtrk * t, const mx * m, sz q, sz i) {
+  if (q == NOC || ckey(m, q) != ckey(m, i)) t->rok = 0;
+}
+
 void pat_fast(mx * m);
 void pat_cm(mx * m);
-void pat_x(mx * m);
+
+void * smp_fast_new(mx * m);
+void smp_fast_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n);
+void smp_fast_free(void * st);
+void * smp_ls_new(mx * m);
+void smp_ls_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n);
+void smp_ls_free(void * st);
+
 
 #endif

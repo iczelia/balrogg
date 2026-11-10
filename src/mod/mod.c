@@ -44,8 +44,16 @@ int mod_is_archive(const char * path) {
 }
 
 static const u8 LEVELS[BLR_NLEV] = {
-  1, 20, 21, 23, 24, 24, 24, 24, 24, 40, 41, 42, 43, 44, 47, 47, 48, 48, 49, 49
+  1, 1, 1, 1, 1, 20, 20, 20, 20, 20, 20, 20, 20, 23, 23, 23, 23, 23, 23, 23
+}, SLEVELS[BLR_NLEV] = {
+  2, 4, 6, 7, 9, 10, 11, 12, 31, 33, 34, 34, 34, 36, 37, 38, 40, 41, 41, 41
 };
+
+int mod_level_scfg(int level) {
+  const char * e = getenv("BLR_MOD_SCFG");
+  if (e) return atoi(e);
+  return MOD_SCFG0 + SLEVELS[CLAMP(level, 1, BLR_NLEV) - 1];
+}
 
 int mod_level_cfg(int level) {
   const char * e = getenv("BLR_MOD_CFG");
@@ -70,12 +78,13 @@ static void emit(const char * out, const u8 * h, const u8 * b, sz n) {
   if (bad) FATAL_CODE(BLR_EXIT_IO, "write error on %s", out);
 }
 
-int mod_pack(const char * in, const char * out, int cfg) {
+int mod_pack(const char * in, const char * out, int cfg, int scfg) {
   sz n, cl = 0;
   u8 * b = slurp(in, &n), * c = NULL, h[MDA_HDR];
-  int ok = n <= MOD_MAXN && mod_kind(b, n, n) && mod_config(cfg);
+  int ok = n <= MOD_MAXN && mod_kind(b, n, n) && mod_config(cfg) &&
+           mod_sconfig(scfg);
   if (ok) {
-    cl = mod_code(b, n, cfg, &c);
+    cl = mod_code(b, n, cfg, scfg, &c);
     ok = cl < n;
   }
   put_head(h, ok ? MDE_CM : MDE_STORE, cfg, n);

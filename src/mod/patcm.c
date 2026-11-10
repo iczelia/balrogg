@@ -26,18 +26,16 @@ typedef u32 ctr;
 #define TL 60
 
 enum {
-  O_HASH = 1, O_H2 = 2, O_M2 = 4, O_RH = 8, O_RX = 16, O_APM = 32, O_M3 = 64,
-  O_FLAG = 128, O_EF = 256
+  O_HASH = 1, O_H2 = 2, O_M2 = 4, O_RH = 8, O_FLAG = 128, O_EF = 256
 };
 
 typedef struct { i32 w[NI + 1];  u32 n; } mw;
 
 typedef struct {
   ctr * t[NI], * mt[NM], * ht;
-  u32 mv[NM], hh[NH], s2, s3;
+  u32 mv[NM], hh[NH], s2;
   int n, nm, nh;
-  i32 * a1, * a2;
-  mw * w2, * w3;
+  mw * w2;
 } tin;
 
 typedef struct {
@@ -49,7 +47,7 @@ typedef struct {
 typedef struct {
   ctr na[32][4], nb[64][32], nc[3][16], nd[3][8], ne[3][2][16];
   ctr nf[3][2][32], ng[16][8][2], nh[17][16][2], ni[3][3][3];
-  ctr nj[256][4], nk[256][3], nl[16][33];
+  ctr nj[256][4], nk[256][3];
   ctr ea[32][4], eb[3][3][2][2], ec[256][2], ed[64][2];
   ctr h1a[16][4], h1b[3][3][3], h1c[256], h1d[64], h2a[8][3], h2b[3][2][2];
   ctr za[17][2][2], zb[3][3][3], zc[64][2], zd[256], ze[17][2], zf[256][2];
@@ -65,28 +63,9 @@ typedef struct {
   mw wp[7][4], wx[12][4], ws[8][4], wf[2][4][4], wr[16][8][4];
   mw vn[16][3], vh1[16][3], vz[17][2];
   mw vp[7][16], vs[8][16], vf[4][16], vr[8][16];
-  mw up[7][16], us[8][16], uf[4][16], ur[8][16];
-  i32 an1[3][3][3][33], an2[16][2][33], ah1[16][4][33], ah2[3][3][3][33];
-  i32 aq1[8][3][33], az1[17][2][33], az2[3][3][33];
-  i32 ap1[128][33], ap2[1024][33], as1[256][33], as2[1024][33];
-  i32 af1[2][16][33], af2[1024][33], ar1[16][256][33], ar2[1024][33];
   u16 dv[256];
   u8 sef[256], spa[256], sps[98], scv[256];
 } pz;
-
-static INLINE int apm_p(const i32 * t, int s, int * lo, int * wt) {
-  int x = s + 2048, j;
-  *lo = j = x >> 7;  *wt = x & 127;
-  return ((acm_squash((j - 16) * 128) * 16 + t[j]) * (128 - *wt) +
-          (acm_squash((j - 15) * 128) * 16 + t[j + 1]) * *wt) >> 7;
-}
-
-static INLINE void apm_u(i32 * t, int lo, int wt, int bit) {
-  int g = bit ? 65535 : 0;
-  t[lo] += ((g - acm_squash((lo - 16) * 128) * 16 - t[lo]) * (128 - wt)) >> 11;
-  t[lo + 1] +=
-    ((g - acm_squash((lo - 15) * 128) * 16 - t[lo + 1]) * wt) >> 11;
-}
 
 static INLINE u32 cadapt(const pz * z, u32 s, int lim, int bit) {
   u32 n = s >> 16, p = rc_adapt_prob(rc_packed_prob(s), z->dv[n], bit);
@@ -94,10 +73,9 @@ static INLINE u32 cadapt(const pz * z, u32 s, int lim, int bit) {
 }
 
 static INLINE int cbitn(mx * m, const pz * z, ctr * const * c, int n,
-                        mw * const * ws, int nw, i32 * a1, i32 * a2, int lim,
-                        int bit) {
+                        mw * const * ws, int nw, int lim, int bit) {
   i32 st[NI + 1], pm[3], err, s = 0, p1;
-  int i, j, l1 = 0, w1 = 0, l2 = 0, w2 = 0;
+  int i, j;
   Fi(n, st[i] = acm_str[(65536 - rc_packed_prob(*c[i])) >> 4]);
   st[n] = 256;
   Fj(nw,
@@ -108,9 +86,7 @@ static INLINE int cbitn(mx * m, const pz * z, ctr * const * c, int n,
     pm[j] = acm_squash(t);  s += t);
   s /= nw;
   p1 = acm_squash(s) * 16;
-  if (a1) p1 = (p1 + apm_p(a1, s, &l1, &w1) + apm_p(a2, s, &l2, &w2)) / 3;
   bit = mx_bit(m, bit, (u32) CLAMP(65536 - p1, 32, 65504));
-  if (a1) { apm_u(a1, l1, w1, bit);  apm_u(a2, l2, w2, bit); }
   Fj(nw,
     mw * w = ws[j];
     err = ((bit ? 4095 : 0) - pm[j]) *
@@ -122,10 +98,10 @@ static INLINE int cbitn(mx * m, const pz * z, ctr * const * c, int n,
 }
 
 static INLINE int cbit(mx * m, const pz * z, ctr * const * c, int n, mw * w,
-                       mw * v, i32 * a1, i32 * a2, int bit) {
+                       mw * v, int bit) {
   mw * ws[2];
   ws[0] = w;  ws[1] = v;
-  return cbitn(m, z, c, n, ws, v ? 2 : 1, a1, a2, FL, bit);
+  return cbitn(m, z, c, n, ws, v ? 2 : 1, FL, bit);
 }
 
 static u32 mtree(mx * m, const pz * z, const tin * x, mw * w, int nb, u32 v,
@@ -133,7 +109,7 @@ static u32 mtree(mx * m, const pz * z, const tin * x, mw * w, int nb, u32 v,
   u32 node = 1;
   int d, i, k, na, nw;
   ctr * c[NI];
-  mw * ws[3];
+  mw * ws[2];
   for (d = 0; d < nb; d++) {
     k = 0;  na = 0;
     Fi(x->n, c[k++] = x->t[i] + node);
@@ -146,11 +122,8 @@ static u32 mtree(mx * m, const pz * z, const tin * x, mw * w, int nb, u32 v,
     na = MIN(na, 3);
     ws[0] = w + d * 4 + na;  nw = 1;
     if (x->w2) ws[nw++] = x->w2 + d * 16 + (x->s2 & 15);
-    if (x->w3) ws[nw++] = x->w3 + d * 16 + (x->s3 & 15);
     node = node * 2 +
-      (u32) cbitn(m, z, c, k, ws, nw, x->a1 ? x->a1 + 33 * node : NULL,
-                  x->a1 ? x->a2 + 33 * (node + 256 * (u32) na) : NULL, lim,
-                  (int) (v >> (nb - 1 - d) & 1));
+      (u32) cbitn(m, z, c, k, ws, nw, lim, (int) (v >> (nb - 1 - d) & 1));
   }
   return node - (1u << nb);
 }
@@ -178,10 +151,8 @@ static void addm(tin * x, ctr * t, u32 v) {
 #define OPT(o, a) (x->opt & (o) ? (a) : NULL)
 #define HASNOTE(v) (((v) >> 16 & 0xFFF) != 0)
 
-static void mixers(pz * z, tin * X, const pc * x, mw * w2, mw * w3, u32 s2,
-                   u32 s3) {
-  X->w2 = OPT(O_M2, w2);  X->w3 = OPT(O_M3, w3);
-  X->s2 = s2;  X->s3 = s3;  X->ht = z->ht;
+static void mixers(pz * z, tin * X, const pc * x, mw * w2, u32 s2) {
+  X->w2 = OPT(O_M2, w2);  X->s2 = s2;  X->ht = z->ht;
 }
 
 static u32 c_pitch(mx * m, pz * z, const pc * x, u32 sym) {
@@ -210,10 +181,8 @@ static u32 c_pitch(mx * m, pz * z, const pc * x, u32 sym) {
     bk = j == 0 ? MIN(x->mlb - 1, 3) : j == 1 ? MIN(x->rb - 1, 3)
        : j == 2 ? (x->ln == 0) + 2 * (x->pr != NOC) : x->r & 3;
     addm(&X, z->pm[j][agree(vv, ok, 6, j) * 4 + bk][0], vv[j] - 1));
-  X.a1 = OPT(O_APM, z->ap1[0]);  X.a2 = z->ap2[0];
-  mixers(z, &X, x, z->vp[0], z->up[0],
-         (u32) MIN(x->mlb, 3) * 4 + (x->ln == 0) * 2 + (x->rb > 0),
-         x->ln ? 1 + (x->ln - 1) / 8 : 0);
+  mixers(z, &X, x, z->vp[0],
+         (u32) MIN(x->mlb, 3) * 4 + (x->ln == 0) * 2 + (x->rb > 0));
   sym = 1 + mtree(m, z, &X, z->wp[0], 7, sym - 1, TL);
   return MIN(sym, NSYM - 1);
 }
@@ -224,7 +193,7 @@ static u32 c_pidx(mx * m, pz * z, const pc * x, u32 sym, u32 per) {
   if (cnt < 2) return cnt ? m->aper[a] : m->dec ? mod_semi_lo((int) s) : per;
   m->ty = T_PIDX;
   if (!m->dec) while (m->aper[a + k] != per) k++;
-  X.n = 2;  X.nm = 0;  X.nh = 0;  X.a1 = NULL;  X.w2 = X.w3 = NULL;
+  X.n = 2;  X.nm = 0;  X.nh = 0;  X.w2 = NULL;
   X.t[0] = z->xa[s];  X.t[1] = z->xb[x->ls];
   if (cnt > 64) { X.n = 1;  X.t[0] = z->xc; }
   k = mtree(m, z, &X, z->wx[0], cnt > 64 ? 12 : 6, k, FL);
@@ -242,7 +211,7 @@ static u32 c_smp(mx * m, pz * z, const pc * x, u32 smp, u32 sym) {
     cx[0] = &z->qs[zn][MIN(x->mlb, 3)][a][x->h1f];
     cx[1] = &z->qs2[(x->ls == SM(x->up)) * 8 + (x->ls == z->sps[sym]) * 4 +
                     (x->ls == SM(x->lf)) * 2 + !zn][zn];
-    if (cbit(m, z, cx, 2, &z->qws[zn], NULL, NULL, NULL, smp == x->ls))
+    if (cbit(m, z, cx, 2, &z->qws[zn], NULL, smp == x->ls))
       return x->ls;
   }
   vv[0] = x->ls;  vv[1] = SM(x->pr);  vv[2] = SM(x->q);  vv[3] = SM(x->up);
@@ -267,8 +236,7 @@ static u32 c_smp(mx * m, pz * z, const pc * x, u32 smp, u32 sym) {
   }
   Fj(6,
     if (ok[j]) addm(&X, z->sm[j][agree(vv, ok, 6, j) * 2 + zn][0], vv[j]));
-  X.a1 = OPT(O_APM, z->as1[0]);  X.a2 = z->as2[0];
-  mixers(z, &X, x, z->vs[0], z->us[0], zn * 12 + (u32) MIN(x->mlb, 3), x->ls);
+  mixers(z, &X, x, z->vs[0], zn * 12 + (u32) MIN(x->mlb, 3));
   return mtree(m, z, &X, z->ws[0], 8, smp, TL);
 }
 
@@ -291,8 +259,7 @@ static u32 c_eff(mx * m, pz * z, const pc * x, u32 eff, u32 zn, u32 smp) {
     X.hh[X.nh++] = H3(34, e1 << 8 | PA(x->l1), zn);
   }
   Fj(5, if (ok[j]) addm(&X, z->fm[j][agree(vv, ok, 5, j) * 2 + zn][0], vv[j]));
-  X.a1 = OPT(O_APM, z->af1[zn][0]);  X.a2 = z->af2[0];
-  mixers(z, &X, x, z->vf[0], z->uf[0], MIN(e1, 15), MIN(vv[1], 15));
+  mixers(z, &X, x, z->vf[0], MIN(e1, 15));
   return mtree(m, z, &X, z->wf[zn][0], 4, eff, TL);
 }
 
@@ -308,7 +275,7 @@ static u32 c_par(mx * m, pz * z, const pc * x, u32 par, u32 e, u32 zn,
     cx[0] = &z->qr[e][E17(x->l1) == e ? 1 + (PA(x->l1) == lpc) : 0][zn];
     cx[1] = &z->qr2[e][E17(x->pr) == e ? 1 + (PA(x->pr) == lpc) * 4 +
                        MIN(x->mlb, 3) : 0];
-    if (cbit(m, z, cx, 2, &z->qwr[e], NULL, NULL, NULL, par == lpc))
+    if (cbit(m, z, cx, 2, &z->qwr[e], NULL, par == lpc))
       return lpc;
   }
   vv[0] = PA(x->l1);  ok[0] = E17(x->l1) == e;
@@ -330,8 +297,7 @@ static u32 c_par(mx * m, pz * z, const pc * x, u32 par, u32 e, u32 zn,
   }
   Fj(8, if (ok[j]) addm(&X, z->rm[j][e][0], vv[j]));
   if (e == 12) addm(&X, z->rm[7][15][0], z->scv[sx]);
-  X.a1 = OPT(O_APM, z->ar1[e][0]);  X.a2 = z->ar2[0];
-  mixers(z, &X, x, z->vr[0], z->ur[0], e, lpc >> 4);
+  mixers(z, &X, x, z->vr[0], e);
   return mtree(m, z, &X, z->wr[e][0], 8, par, TL);
 }
 
@@ -346,15 +312,13 @@ static int c_hit(mx * m, pz * z, const pc * x, const u32 * cv, const u8 * hs,
   cx[2] = &z->h1c[h];
   cx[3] = &z->h1d[x->r];
   return cbit(m, z, cx, 4, &z->wh1[MIN(x->mlb, 3)],
-              OPT(O_M2, &z->vh1[h & 15][ua]), OPT(O_APM, z->ah1[x->mlb][h & 3]),
-              z->ah2[qa][ua][la], v == x->kp);
+              OPT(O_M2, &z->vh1[h & 15][ua]), v == x->kp);
 }
 
 void pat_cm(mx * m) {
   const mod_lay * L = &m->L;
   const int ch = L->ch;
   const sz rowc = (sz) ch, patc = (sz) ch * MOD_ROWS;
-  const int mb = CLAMP((int) blr_ilog((u32) L->ncell) + 1, 8, 22);
   pz * z = xcalloc(1, sizeof *z);
   u8 * ln = xcalloc(rowc, 1), * ls = xcalloc(rowc, 1),
      * lp = xcalloc(rowc * 16, 1), * lp2 = xcalloc(rowc * 16, 1),
@@ -362,13 +326,14 @@ void pat_cm(mx * m) {
      * hs = xcalloc(rowc, 1), * nh8 = xcalloc(rowc, 1),
      * eh8 = xcalloc(rowc, 1);
   u32 * cv = xcalloc(L->ncell + 1, sizeof *cv);
-  u32 * rt = xcalloc((sz) 1 << mb, sizeof *rt), rml = 0, rok = 1;
-  sz rp = NOC, i;
+  sz i;
+  rtrk R;
   mw * w;
   mtrk T;
   mt_init(&T, L->ncell, rowc);
+  rt_init(&R, L->ncell, rowc);
   Fi(256, z->dv[i] = (u16) (65536 / (i + 2)));
-  for (w = z->wn[0]; w <= &z->ur[7][15]; w++) {
+  for (w = z->wn[0]; w <= &z->vr[7][15]; w++) {
     Fi(NI, w->w[i] = W0);
     w->w[NI] = 0;
   }
@@ -388,19 +353,11 @@ void pat_cm(mx * m) {
     x->l8 = x->r >= 8 ? i - 8 * rowc : NOC;
     x->l16 = x->r >= 16 ? i - 16 * rowc : NOC;
     x->up = i >= patc ? i - patc : NOC;  x->lf = x->c ? i - 1 : NOC;
-    if (!x->c && i >= rowc) {
-      u32 hk = 0, k;
-      for (k = 0; k < (u32) ch; k++) hk = chash(hk, ckey(m, i - rowc + k), 32);
-      hk >>= 32 - mb;
-      if (rp != NOC && rok) { rp += rowc;  rml++; }
-      else { rp = rt[hk] ? rt[hk] - 1 : NOC;  rml = 0; }
-      rt[hk] = (u32) i + 1;
-      rok = 1;
-    }
+    rt_row(&R, m, i);
     x->pr = mt_pred(&T, x->c, i);
-    x->q = rp != NOC && rp + (sz) x->c < i ? rp + (sz) x->c : NOC;
+    x->q = rt_pred(&R, x->c, i);
     x->mlb = x->pr == NOC ? 0 : 1 + (int) MIN(T.ml[x->c], 14);
-    x->rb = x->q == NOC ? 0 : 1 + (int) MIN(rml, 6);
+    x->rb = x->q == NOC ? 0 : 1 + (int) MIN(R.rml, 6);
     x->kp = x->pr != NOC ? cv[x->pr] : 0;  x->kq = x->q != NOC ? cv[x->q] : 0;
     x->ln = ln[x->c];  x->ln2 = ln2[x->c];  x->ls = ls[x->c];
     if (src) v = rd32be(src);
@@ -420,13 +377,10 @@ void pat_cm(mx * m) {
     ncx[8] = &z->ni[np][nq][nu];
     ncx[9] = &z->nj[nh8[x->c]][x->r & 3];
     ncx[10] = &z->nk[hs[x->c]][np];
-    ncx[11] = &z->nl[nh8[x->c] & 15][x->c ? nh8[x->c - 1] & 31 : 32];
-    nn = x->opt & O_RH ? x->opt & O_RX ? 12 : 11 : 9;
+    nn = x->opt & O_RH ? 11 : 9;
     if (!(x->opt & O_EF))
       nv = cbit(m, z, ncx, nn, &z->wn[np][n1 == 1],
-                OPT(O_M2, &z->vn[x->r & 15][nu]),
-                OPT(O_APM, z->an1[np][nu][n1]), z->an2[x->r & 15][n1 == 1],
-                HASNOTE(v));
+                OPT(O_M2, &z->vn[x->r & 15][nu]), HASNOTE(v));
     if (x->kp && (nv < 0 || HASNOTE(x->kp) == nv)) {
       hit = c_hit(m, z, x, cv, hs, v);
       if (hit) { v = x->kp;  done = 1; }
@@ -437,8 +391,7 @@ void pat_cm(mx * m) {
       int ua = x->up == NOC ? 2 : cv[x->up] == x->kq;
       cx[0] = &z->h2a[x->rb][ua];
       cx[1] = &z->h2b[ua][x->pr != NOC][x->l1 != NOC && cv[x->l1] == x->kq];
-      if (cbit(m, z, cx, 2, &z->wh2[x->pr != NOC], NULL,
-               OPT(O_APM, z->aq1[x->rb][ua]), z->aq1[x->rb][ua], v == x->kq)) {
+      if (cbit(m, z, cx, 2, &z->wh2[x->pr != NOC], NULL, v == x->kq)) {
         v = x->kq;  done = 1;
       } else x->h1f = 1;
     }
@@ -449,11 +402,10 @@ void pat_cm(mx * m) {
       cx[1] = &z->eb[ep][eu][e1][x->h1f];
       cx[2] = &z->ec[eh8[x->c] | nh8[x->c]][e1];
       cx[3] = &z->ed[x->r][e1];
-      if (cbit(m, z, cx, 4, &z->we[ep], NULL, NULL, NULL, v == 0)) {
+      if (cbit(m, z, cx, 4, &z->we[ep], NULL, v == 0)) {
         v = 0;  done = 1;
       } else
-        nv = cbit(m, z, ncx, 9, &z->wn[np][n1 == 1], NULL, NULL, NULL,
-                  HASNOTE(v));
+        nv = cbit(m, z, ncx, 9, &z->wn[np][n1 == 1], NULL, HASNOTE(v));
     }
     if (!done && !nv && !(x->opt & O_EF)) {
       int ep = EZ(x->pr), eu = EZ(x->up);
@@ -464,8 +416,7 @@ void pat_cm(mx * m) {
       cx[4] = &z->ze[z->sef[x->ls] & 15][e1];
       cx[5] = &z->zf[eh8[x->c]][x->h1f];
       if (cbit(m, z, cx, x->opt & O_RH ? 6 : 5, &z->wz[ep],
-               OPT(O_M2, &z->vz[E17(x->l1)][e1]),
-               OPT(O_APM, z->az1[E17(x->l1)][e1]), z->az2[ep][eu], v == 0)) {
+               OPT(O_M2, &z->vz[E17(x->l1)][e1]), v == 0)) {
         v = 0;  done = 1;
       }
     }
@@ -500,9 +451,9 @@ void pat_cm(mx * m) {
     smp = smp ? smp : ls[x->c];
     if (eff == 12) z->scv[smp] = (u8) par;
     if (eff || par) { z->sef[smp] = (u8) eff;  z->spa[smp] = (u8) par; }
-    if (x->q == NOC || ckey(m, x->q) != ckey(m, i)) rok = 0;
+    rt_next(&R, m, x->q, i);
     mt_next(&T, m, x->c, i, x->pr));
   mt_free(&T);
   xfree(z);  xfree(ln);  xfree(ls);  xfree(lp);  xfree(lp2);  xfree(ln2);
-  xfree(dn);  xfree(hs);  xfree(nh8);  xfree(eh8);  xfree(cv);  xfree(rt);
+  xfree(dn);  xfree(hs);  xfree(nh8);  xfree(eh8);  xfree(cv);  xfree(R.rt);
 }
