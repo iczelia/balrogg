@@ -27,8 +27,10 @@
 #define ARC_KMP3      0x01
 #define ARC_KGAPS     0x02
 #define ARC_KOPUS     0x04
+#define ARC_KMOD      0x08
 #define ARC_OGGHDR    (ARC_HDRLEN + ARC_LENLEN + ARC_SUMLEN)
 #define ARC_MP3HDR    (ARC_MAGLEN + 4 + 8)
+#define ARC_MODHDR    ARC_MP3HDR
 
 typedef struct {
   u8 * data;
@@ -58,6 +60,7 @@ u32 arc_sum_get(void);
 int arc_sum_peek(const u8 * h, sz n, u32 * crc);
 int arc_is(const u8 * h, sz n);
 int arc_is_mp3(const u8 * h, sz n);
+int arc_is_mod(const u8 * h, sz n);
 
 void arc_init(archive * a, int opus, int cfg);
 void arc_begin(archive * a, blr_file * output);

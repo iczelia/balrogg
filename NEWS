@@ -5,6 +5,7 @@ v1.6 (??-??-????)
 - Performance improvements.
 - Compression ratio improvements.
 - Mp3 recompression.
+- MOD module recompression.
 - New effort level scheme (-1 through -20).
 
 v1.5 (27-10-2026)

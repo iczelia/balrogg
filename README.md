@@ -1,6 +1,7 @@
 # balrogg
 
-balrogg losslessly recompresses Ogg Vorbis and Opus files, and MP3 files.
+balrogg losslessly recompresses Ogg Vorbis and Opus files, MP3 files, and MOD
+modules.
 Archives are typically 8-12% smaller than `.ogg` files, 3-8% smaller than
 `.opus` files and 15-24% smaller than `.mp3` files.
 

@@ -29,10 +29,15 @@ int arc_is_mp3(const u8 * h, sz n) {
   return arc_is(h, n) && h[ARC_MAGLEN + 1] == ARC_KMP3;
 }
 
+int arc_is_mod(const u8 * h, sz n) {
+  return arc_is(h, n) && h[ARC_MAGLEN + 1] == ARC_KMOD;
+}
+
 int arc_sum_peek(const u8 * h, sz n, u32 * crc) {
   sz at;
   if (!arc_is(h, n)) return 0;
   if (arc_is_mp3(h, n)) at = ARC_MP3HDR;
+  else if (arc_is_mod(h, n)) at = ARC_MODHDR;
   else at = ARC_HDRLEN + ARC_LENLEN;
   if (n < at + ARC_SUMLEN) return 0;
   *crc = rd32le(h + at);

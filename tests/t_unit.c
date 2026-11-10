@@ -20,6 +20,7 @@
 #include "coder/model.h"
 #include "fmt/ogg.h"
 #include "sys/map.h"
+#include "mod/mod.h"
 #include <errno.h>
 #if defined(HAVE_FORK) && defined(HAVE_WAITPID) && \
     defined(HAVE_SYS_WAIT_H) && defined(HAVE_UNISTD_H)
@@ -603,6 +604,91 @@ static void t_kernels(cm_bit_fn reference, cm_bit_fn kernel,
 }
 #endif
 
+static void t_mod_cell(u8 * c, u32 per, u32 smp, u32 eff, u32 par) {
+  c[0] = (u8) ((smp & 0xF0) | per >> 8);  c[1] = (u8) per;
+  c[2] = (u8) ((smp & 15) << 4 | eff);  c[3] = (u8) par;
+}
+
+static sz t_mod_make(u8 * b, int v) {
+  static const u16 per[6] = { 856, 428, 214, 113, 339, 1712 };
+  int ns = v == 5 ? 15 : 31, ch = v == 4 ? 8 : 4, i, k, np, p0 = 0;
+  sz hdr = ns == 31 ? MOD_HDR31 : MOD_HDR15, n, so = 20 + 30 * (sz) ns;
+  u32 len;
+  memset(b, 0, hdr);
+  memcpy(b, "synthetic module", 16);
+  Fi(ns,
+    u8 * s = b + 20 + 30 * i;
+    len = i < 4 ? 64 + 32 * (u32) i : 0;
+    if (i < 4) memcpy(s, "smp", 3);
+    if (v == 8) { s[10] = (u8) ('a' + i);  s[20] = 0x41; }
+    s[22] = (u8) (len >> 8);  s[23] = (u8) len;
+    s[24] = ns == 31 ? (u8) (i & 15) : 0;  s[25] = (u8) (v == 9 ? 64 : 40);
+    if (v == 8 && i < 4) {
+      s[27] = (u8) (i * 3);  s[29] = (u8) (len - (u32) i * 3 - (i & 1));
+    } else s[29] = (u8) (v == 8 && i == 5 ? 0 : 1));
+  b[so] = 3;  b[so + 1] = (u8) (v == 2 ? 0 : 127);
+  Fk(3, b[so + 2 + k] = (u8) (k == 2 ? 0 : k);  p0 = MAX(p0, b[so + 2 + k]));
+  if (v == 8) { b[so + 2 + 9] = 5;  p0 = 5; }
+  p0++;
+  if (ns == 31) memcpy(b + 1080, v == 4 ? "8CHN" : v == 1 ? "FLT4" : "M.K.", 4);
+  np = v == 6 ? p0 + 2 : p0;
+  n = hdr;
+  Fk(np * 64 * ch,
+    u8 * c = b + n + 4 * (sz) k;
+    if (v == 7)
+      t_mod_cell(c, xt_next(&rng, 4096), xt_next(&rng, 256),
+                 xt_next(&rng, 16), xt_next(&rng, 256));
+    else if (xt_next(&rng, 3))
+      t_mod_cell(c, 0, 0, xt_next(&rng, 2) ? 0 : 12, xt_next(&rng, 65));
+    else
+      t_mod_cell(c, per[xt_next(&rng, 6)], 1 + xt_next(&rng, 4),
+                 xt_next(&rng, 16), xt_next(&rng, 256)));
+  n += (sz) np * 64 * (sz) ch * 4;
+  Fi(4,
+    len = 2 * (64 + 32 * (u32) i);
+    Fk((int) len, b[n + (sz) k] = (u8) (k < 2 ? 0 : (k * 7 + i * 3) & 255));
+    n += len);
+  if (v == 1) { memcpy(b + n, "\0\x11U3\"\x11\1\2\0", 9);  n += 9; }
+  if (v == 2) n -= 100;
+  if (v == 3) n = hdr + 1003;
+  return n;
+}
+
+static void t_mod(void) {
+  u8 * b = xmalloc(1 << 20), * o = xmalloc(1 << 20), * w = xmalloc(1 << 20),
+     * a;
+  int v, cfg;
+  xt_section_begin("MOD layout and round trip");
+  CHECK(mod_semi(4095) == 0 && mod_semi(856) == 27 && mod_semi(1) == 96,
+        "period buckets");
+  CHECK(mod_tag_ch((const u8 *) "M.K.") == 4 &&
+        mod_tag_ch((const u8 *) "6CHN") == 6 &&
+        mod_tag_ch((const u8 *) "32CH") == 32 &&
+        !mod_tag_ch((const u8 *) "MK.."), "tag channels");
+  for (v = 0; v < 10; v++) {
+    sz n = t_mod_make(b, v), al, i;
+    int ok;
+    if (v == 9) Fi(950, b[i] = (u8) xt_next(&rng, 256));
+    if (v == 9) Fi(128, b[952 + i] = (u8) xt_next(&rng, 3));
+    ok = mod_kind(b, n, n) == (v == 5 ? 15 : 31);
+    CHECK(ok, "synthetic module %d is recognised", v);
+    if (!ok) continue;
+    for (cfg = MOD_CFG0; cfg < MOD_CFG0 + 256; cfg++) {
+      if (!mod_config(cfg)) continue;
+      al = mod_code(b, n, cfg, &a);
+      memset(o, 0xA5, n);
+      CHECK(!mod_decode(a, al, n, cfg, o) && !memcmp(o, b, n),
+            "synthetic module %d round-trips with configuration %d", v, cfg);
+      Fi(3,
+        memcpy(o, a, al);
+        o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
+        (void) mod_decode(o, al, n, cfg, w));
+      xfree(a);
+    }
+  }
+  xfree(b);  xfree(o);  xfree(w);
+}
+
 void xt_run_unit(void) {
   int lr;
   xt_seed(&rng, 20260810UL);
@@ -624,6 +710,7 @@ void xt_run_unit(void) {
 #endif
   t_chunks();
   t_model();
+  t_mod();
   t_training_direction(cm_plain_scalar, "scalar training direction");
 #if defined(HAVE_SSE2)
   if (blr_cpu_sse2())

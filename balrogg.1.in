@@ -39,8 +39,10 @@ balrogg \- lossless Ogg Vorbis and Ogg Opus recompressor
 .BR \-h | \-v
 .SH DESCRIPTION
 .B balrogg
-losslessly recompresses Ogg Vorbis and Opus files, and MP3 files (MPEG-1, 2
-and 2.5 Layer III). Expanding an archive restores the original bytes.
+losslessly recompresses Ogg Vorbis and Opus files, MP3 files (MPEG-1, 2
+and 2.5 Layer III), and MOD modules (ProTracker and compatible 31-sample
+modules, and 15-sample Soundtracker modules). Expanding an archive restores the
+original bytes.
 .SH OPERATIONS
 .TP
 .B e
@@ -134,8 +136,8 @@ require the requested kernel to be built and supported by the CPU.
 AVX2 also requires OS support for saving XMM and YMM state.
 The default prefers AVX2, then SSE2, then the scalar kernel.
 .SH LIMITS
-Input must be seekable, and so must the output of Ogg archives; MP3 archives
-also decode to a pipe. An output that is not a regular file, such as a pipe or
+Input must be seekable, and so must the output of Ogg archives; MP3 and MOD
+archives also decode to a pipe. MOD modules larger than 1 GiB are stored. An output that is not a regular file, such as a pipe or
 .IR /dev/null ,
 is checked as it is written: on a checksum mismatch the bytes already written
 cannot be taken back, and only the exit status reports it.

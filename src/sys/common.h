@@ -97,10 +97,12 @@ static INLINE u32 rd32le(const u8 * p) {
 static INLINE uint64_t rd64le(const u8 * p) {
   return rd32le(p) | (uint64_t) rd32le(p + 4) << 32;
 }
+static INLINE u32 rd16be(const u8 * p) { return (u32) p[0] << 8 | p[1]; }
 static INLINE u32 rd32be(const u8 * p) {
   return (u32) p[0] << 24 | (u32) p[1] << 16 | (u32) p[2] << 8 | p[3];
 }
 static INLINE void wr16le(u8 * p, u32 v) { p[0] = (u8) v;  p[1] = (u8) (v >> 8); }
+static INLINE void wr16be(u8 * p, u32 v) { p[0] = (u8) (v >> 8);  p[1] = (u8) v; }
 static INLINE void wr32le(u8 * p, u32 v) {
   p[0] = (u8) v;  p[1] = (u8) (v >> 8);  p[2] = (u8) (v >> 16);  p[3] = (u8) (v >> 24);
 }

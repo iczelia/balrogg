@@ -49,7 +49,7 @@ struct acm {
   u16 * a[3];
   acm_coder code;  void * cctx;
   int lrmin, lr2, apw, flim, conf;
-  int lite;
+  int lite, sel8;
   int w16;
   u8 eng[ACM_NTY], cap[ACM_NTY];
   acm_dec d;
@@ -138,9 +138,11 @@ static i32 * w2new(sz mr, sz ns) {
 acm * acm_new(int prof) {
   acm * q = xmalloc(sizeof *q);
   sz i, j, ns, tb, mr, ar;
+  int apms;
   acm_prepare();
   memset(q, 0, sizeof *q);
-  q->w16 = (prof & ACM_W16) != 0;  prof &= ~ACM_W16;
+  q->w16 = (prof & ACM_W16) != 0;  apms = (prof & ACM_APMS) != 0;
+  prof &= ~(ACM_W16 | ACM_APMS);
   if (prof == ACM_OPUS || prof == ACM_OPUSG) {
     q->lrmin = 262;  q->lr2 = 131;  q->apw = 20;  q->flim = 40;  q->conf = 0;
     if (prof == ACM_OPUSG) { q->apw = 50;  q->conf = GATEN; }
@@ -150,31 +152,36 @@ acm * acm_new(int prof) {
       q->lrmin = 132;  q->lr2 = 104;  q->apw = 75;  q->conf = GATEN;
     }
     if (prof == ACM_VLITE) { q->lrmin = 264;  q->lr2 = 208;  q->apw = 100; }
+    if (prof == ACM_MODX) { q->lrmin = 132;  q->lr2 = 104;  q->apw = 75; }
   }
-  q->lite = prof == ACM_VLITE;
+  q->lite = prof == ACM_VLITE || prof == ACM_MODX;
+  q->sel8 = prof == ACM_MODX;
   tb = (sz) 1 << (q->lite ? LTBITS : TBITS);
   mr = q->lite ? LMROWS : MROWS;  ar = q->lite ? LAROWS : AROWS;
-  bm_alloc_huge(&q->tmap, tb * sizeof (slot));
-  q->t = (slot *) (void *) q->tmap.p;
-  q->sm = xcalloc(2 * smn(), sizeof *q->sm);
-  Fi(smn(),
-    q->sm[2 * i] = (u16) (acm_squash(((int) (i & 15) - 8) * 256 + 128) << 4));
-  if (q->w16) {
-    bm_alloc_huge(&q->wmap, (sz) ACM_NSEL * mr * NIN16 * sizeof *q->h1);
-    q->h1 = (i16 *) (void *) q->wmap.p;
-    Fi((sz) ACM_NSEL * mr, q->h1[i * NIN16] = 16384);
-  } else {
-    bm_alloc_huge(&q->wmap, ((sz) ACM_NSEL * mr * NIN + 8) * sizeof *q->w1);
-    q->w1 = (i32 *) (void *) q->wmap.p;
-    Fi((sz) ACM_NSEL * mr, q->w1[i * NIN] = 65536);
+  if (!apms) {
+    bm_alloc_huge(&q->tmap, tb * sizeof (slot));
+    q->t = (slot *) (void *) q->tmap.p;
+    q->sm = xcalloc(2 * smn(), sizeof *q->sm);
+    Fi(smn(),
+      q->sm[2 * i] = (u16) (acm_squash(((int) (i & 15) - 8) * 256 + 128) << 4));
+    if (q->w16) {
+      bm_alloc_huge(&q->wmap, (sz) ACM_NSEL * mr * NIN16 * sizeof *q->h1);
+      q->h1 = (i16 *) (void *) q->wmap.p;
+      Fi((sz) ACM_NSEL * mr, q->h1[i * NIN16] = 16384);
+    } else {
+      bm_alloc_huge(&q->wmap, ((sz) ACM_NSEL * mr * NIN + 8) * sizeof *q->w1);
+      q->w1 = (i32 *) (void *) q->wmap.p;
+      Fi((sz) ACM_NSEL * mr, q->w1[i * NIN] = 65536);
+    }
+    q->w1n = xcalloc((sz) ACM_NSEL * mr, sizeof *q->w1n);
+    ns = q->lite && !q->sel8 ? ACM_NLSEL : ACM_NSEL;
+    q->w2 = w2new(mr, ns);
   }
-  q->w1n = xcalloc((sz) ACM_NSEL * mr, sizeof *q->w1n);
-  ns = q->lite ? ACM_NLSEL : ACM_NSEL;
-  q->w2 = w2new(mr, ns);
-  Fj(3,
-    q->a[j] = xmalloc(ar * 33 * sizeof *q->a[j]);
-    Fi(ar * 33,
-      q->a[j][i] = (u16) (acm_squash(((int) (i % 33) - 16) * 128) * 16)));
+  { u16 row[33];
+    Fi(33, row[i] = (u16) (acm_squash(((int) i - 16) * 128) * 16));
+    Fj(3,
+      q->a[j] = xmalloc(ar * 33 * sizeof *q->a[j]);
+      Fi(ar, memcpy(q->a[j] + i * 33, row, sizeof row))); }
   return q;
 }
 
@@ -388,6 +395,8 @@ int acm_bit(acm * q, int bit, u32 p1, acm_h node) {
         ? bit_k(q, bit, p1, node, ACM_NLSEL, 2, TBITS, MROWS, AROWS, 1)
         : bit_k(q, bit, p1, node, ACM_NLSEL, 2, TBITS, MROWS, AROWS, 0);
   }
+  if (q->sel8)
+    return bit_k(q, bit, p1, node, ACM_NSEL, 2, LTBITS, LMROWS, LAROWS, 0);
   return q->lite
     ? bit_k(q, bit, p1, node, ACM_NLSEL, 2, LTBITS, LMROWS, LAROWS, 0)
     : q->w16 ? bit_k(q, bit, p1, node, ACM_NSEL, 3, TBITS, MROWS, AROWS, 1)
