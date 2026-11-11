@@ -37,6 +37,7 @@ typedef struct { u8 pe;  u32 opt; } mcfg;
 enum { SE_NONE, SE_FAST, SE_LS };
 
 typedef struct { u8 se;  u32 opt; } scfgt;
+const scfgt * mod_scfg_get(int scfg);
 
 typedef struct mx {
   acm * q;

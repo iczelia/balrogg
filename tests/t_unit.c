@@ -21,6 +21,7 @@
 #include "fmt/ogg.h"
 #include "sys/map.h"
 #include "mod/mod.h"
+#include "it/it.h"
 #include <errno.h>
 #if defined(HAVE_FORK) && defined(HAVE_WAITPID) && \
     defined(HAVE_SYS_WAIT_H) && defined(HAVE_UNISTD_H)
@@ -691,6 +692,136 @@ static void t_mod(void) {
   xfree(b);  xfree(o);  xfree(w);
 }
 
+static sz t_it_pat(u8 * b, u32 rows, int bad) {
+  u8 lm[64], seen[64];
+  sz q = IT_PATH;
+  u32 r;
+  int c, j;
+  memset(lm, 0, sizeof lm);  memset(seen, 0, sizeof seen);
+  for (r = 0; r < rows; r++) {
+    if (bad && r == 3) {
+      b[q++] = 0x84;  b[q++] = 1;  b[q++] = 60;
+      b[q++] = 0x82;  b[q++] = 1;  b[q++] = 61;
+    } else
+      for (c = 0; c < 12; c++) {
+        u8 mk;
+        int mp;
+        if (xt_next(&rng, 3)) continue;
+        mk = (u8) xt_next(&rng, 256);
+        mp = mk != lm[c] || !seen[c] || xt_next(&rng, 4) == 0;
+        if (!xt_next(&rng, 4)) { mk = lm[c];  mp = xt_next(&rng, 2); }
+        b[q++] = (u8) ((c + 1) | (mp ? 0x80 : 0));
+        if (mp) b[q++] = lm[c] = mk;
+        seen[c] = 1;
+        Fj(3, if (mk >> j & 1)
+                b[q++] = (u8) (j ? xt_next(&rng, 100)
+                                 : 40 + xt_next(&rng, 40)));
+        if (mk & 8) {
+          b[q++] = (u8) (1 + xt_next(&rng, 26));
+          b[q++] = (u8) xt_next(&rng, 256);
+        }
+      }
+    b[q++] = 0;
+  }
+  wr16le(b, (u32) (q - IT_PATH));  wr16le(b + 2, rows);
+  return q;
+}
+
+static sz t_it_make(u8 * b, int v) {
+  static const u8 fl[4] = { 1, 7, 9, 3 }, cv[4] = { 1, 1, 1, 2 };
+  static const u32 fr[4] = { 300, 200, 500, 100 };
+  const sz on = 5, ni = 2, ns = 4, np = 3, t0 = IT_HDR + on;
+  sz n = t0 + 4 * (ni + ns + np), so[4], i, k, pa[3];
+  int j;
+  memset(b, 0, 1 << 16);
+  memcpy(b, "IMPM", 4);  memcpy(b + 4, "synthetic it", 12);
+  wr16le(b + 0x20, (u32) on);  wr16le(b + 0x22, (u32) ni);
+  wr16le(b + 0x24, (u32) ns);  wr16le(b + 0x26, (u32) np);
+  wr16le(b + 0x28, 0x0214);  wr16le(b + 0x2A, 0x0214);  b[0x2C] = 13;
+  b[0x30] = 128;  b[0x31] = 48;  b[0x32] = 6;  b[0x33] = 125;
+  Fi(64, b[0x40 + i] = 32;  b[0x80 + i] = 64);
+  Fi(on, b[IT_HDR + i] = (u8) (i < 3 ? i : 255));
+  if (v == 1) {
+    memcpy(b + n, "hello\rmessage\r", 14);
+    wr16le(b + 0x36, 14);  wr32le(b + 0x38, (u32) n);  n += 14;
+    memcpy(b + n, "junkgap", 7);  n += 7;
+  }
+  Fi(ni,
+    u8 * s = b + n;
+    memcpy(s, "IMPI", 4);  s[0x11] = 2;  s[0x14] = (u8) (i * 3);
+    memcpy(s + 0x20, "instrument", 10);
+    Fk(120, s[0x40 + 2 * k] = (u8) k;  s[0x41 + 2 * k] = (u8) (1 + i));
+    Fk(25, s[0x136 + 3 * k] = (u8) (64 - 2 * k));
+    s[0x131] = 1;  s[0x132] = 5;
+    wr32le(b + t0 + 4 * i, v == 1 && i == 1 ? 5 : (u32) n);
+    n += IT_INS);
+  Fi(ns,
+    u8 * s = b + n;
+    memcpy(s, "IMPS", 4);  s[0x11] = 64;  s[0x12] = fl[i];  s[0x13] = 64;
+    memcpy(s + 0x14, "sample", 6);  s[0x2E] = cv[i];
+    wr32le(s + 48, fr[i]);  wr32le(s + 60, 8363);
+    wr32le(b + t0 + 4 * (ni + i), (u32) n);
+    so[i] = n;  n += IT_SHD);
+  Fi(np,
+    pa[i] = n;
+    if (i < 2) n += t_it_pat(b + n, i ? 32 : 64, i == 1);
+    wr32le(b + t0 + 4 * (ni + ns + i),
+           i < 2 ? (u32) pa[i] : v == 1 ? (u32) pa[0] : 0));
+  Fj(4,
+    int s = v == 2 ? (j < 2 ? j : 5 - j) : j;
+    u8 * h = b + so[s];
+    wr32le(h + 72, (u32) n);
+    if (s == 2) {
+      uint64_t acc = 0;
+      int na = 0, x = 0, px = 0;
+      sz at = n;
+      n += 2;
+      Fk(fr[2],
+        x = (int) (k * 5 % 97) - 48 + (int) xt_next(&rng, 5);
+        acc |= (uint64_t) ((x - px) & 255) << na;  na += 9;  px = x;
+        while (na >= 8) { b[n++] = (u8) acc;  acc >>= 8;  na -= 8; });
+      if (na) b[n++] = (u8) acc;
+      wr16le(b + at, (u32) (n - at - 2));
+    } else {
+      sz len = fr[s] * (s == 1 ? 4 : s == 3 ? 2 : 1);
+      Fk(len, b[n + k] = (u8) (k * 13 % 251 + xt_next(&rng, 3)));
+      n += len;
+    });
+  if (v == 1) n -= 50;
+  if (v == 2) n -= 30;
+  return n;
+}
+
+static void t_it(void) {
+  u8 * b = xmalloc(1 << 16), * o = xmalloc(1 << 16), * w = xmalloc(1 << 16),
+     * a;
+  int v, k;
+  xt_section_begin("IT layout and round trip");
+  for (v = 0; v < 3; v++) {
+    sz n = t_it_make(b, v), al, i;
+    CHECK(it_kind(b, n), "synthetic IT %d is recognised", v);
+    if (!it_kind(b, n)) continue;
+    for (k = 0; k < 300; k++) {
+      it_cfg c;
+      c.s8 = k < 100 ? MOD_SCFG0 + k : MOD_SCFG0 + 12;
+      c.st = k >= 100 && k < 200 ? IT_STC0 + k - 100 : IT_STC0 + 1;
+      c.s16 = k >= 200 ? IT_S16C0 + k - 200 : IT_S16C0 + 1;
+      if (!it_cfg_ok(&c)) continue;
+      al = it_code(b, n, &c, &a);
+      memset(o, 0xA5, n);
+      CHECK(!it_decode(a, al, n, c.s8, o) && !memcmp(o, b, n),
+            "synthetic IT %d round-trips with configuration %d/%d/%d", v,
+            c.s8, c.s16, c.st);
+      Fi(3,
+        memcpy(o, a, al);
+        o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
+        (void) it_decode(o, al, n, c.s8, w));
+      xfree(a);
+    }
+  }
+  xfree(b);  xfree(o);  xfree(w);
+}
+
 void xt_run_unit(void) {
   int lr;
   xt_seed(&rng, 20260810UL);
@@ -713,6 +844,7 @@ void xt_run_unit(void) {
   t_chunks();
   t_model();
   t_mod();
+  t_it();
   t_training_direction(cm_plain_scalar, "scalar training direction");
 #if defined(HAVE_SSE2)
   if (blr_cpu_sse2())

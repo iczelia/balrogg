@@ -15,10 +15,59 @@
 #include "mod/lstm.h"
 #include "coder/squash.h"
 
-void ml_reset(mlstm * s) { memset(s, 0, sizeof *s); }
+#if defined(HAVE_SSE2) && defined(__SSE2__)
+#include <emmintrin.h>
 
-void ml_step(mlstm * s, const i32 * x) {
-  i32 z[ML_G], r = ml_s > 0 ? 1 << (ml_s - 1) : 0;
+#define ML_P ((ML_NI + ML_H) / 2)
+
+static i16 mlwi[ML_P][2 * ML_G];
+
+static void ml_init(void) {
+  static int done = 0;
+  int q, g;
+  if (done) return;
+  done = 1;
+  for (q = 0; q < ML_P; q++)
+    for (g = 0; g < 2 * ML_G; g++) {
+      int j = 2 * q + (g & 1);
+      mlwi[q][g] = j < ML_NI ? ml_w[j * ML_G + g / 2]
+                             : ml_u[(j - ML_NI) * ML_G + g / 2];
+    }
+}
+
+static void ml_pairs(__m128i * a, const i32 * v, int q0, int nq) {
+  int q, k;
+  for (q = 0; q < nq; q++) {
+    const __m128i * w = (const __m128i *) (void *) mlwi[q0 + q];
+    __m128i b;
+    if (!(v[2 * q] | v[2 * q + 1])) continue;
+    b = _mm_unpacklo_epi16(_mm_set1_epi16((short) v[2 * q]),
+                           _mm_set1_epi16((short) v[2 * q + 1]));
+    Fk(ML_G / 4,
+      a[k] = _mm_add_epi32(a[k], _mm_madd_epi16(_mm_loadu_si128(w + k), b)));
+  }
+}
+
+static void ml_gates(const mlstm * s, const i32 * x, i32 * z) {
+  __m128i a[ML_G / 4];
+  i32 r = ml_s > 0 ? 1 << (ml_s - 1) : 0;
+  int k;
+  Fk(ML_G / 4, a[k] = _mm_setzero_si128());
+  ml_pairs(a, x, 0, ML_NI / 2);
+  Fk(ML_G / 4,
+    __m128i b = _mm_set_epi32(ml_b[4 * k + 3], ml_b[4 * k + 2],
+                              ml_b[4 * k + 1], ml_b[4 * k]);
+    a[k] = _mm_add_epi32(_mm_slli_epi32(a[k], ml_sw),
+                         _mm_add_epi32(b, _mm_set1_epi32(r))));
+  ml_pairs(a, s->h, ML_NI / 2, ML_H / 2);
+  Fk(ML_G / 4, _mm_storeu_si128((__m128i *) (void *) (z + 4 * k),
+                                _mm_srai_epi32(a[k], ml_s)));
+}
+
+void ml_reset(mlstm * s) { ml_init();  memset(s, 0, sizeof *s); }
+#else
+static void ml_gates(const mlstm * s, const i32 * x, i32 * z) {
+  i32 r = ml_s > 0 ? 1 << (ml_s - 1) : 0;
   int g, j;
   Fj(ML_G, z[j] = 0);
   Fj(ML_NI,
@@ -31,6 +80,15 @@ void ml_step(mlstm * s, const i32 * x) {
     i32 v = s->h[j];
     if (v) for (g = 0; g < ML_G; g++) z[g] += u[g] * v);
   Fj(ML_G, z[j] >>= ml_s);
+}
+
+void ml_reset(mlstm * s) { memset(s, 0, sizeof *s); }
+#endif
+
+void ml_step(mlstm * s, const i32 * x) {
+  i32 z[ML_G];
+  int j;
+  ml_gates(s, x, z);
   Fj(ML_H,
     i32 i = acm_squash(z[j]), f = acm_squash(z[ML_H + j]),
         c = 2 * acm_squash(2 * z[2 * ML_H + j]) - 4096,

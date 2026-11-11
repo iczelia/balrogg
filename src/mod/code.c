@@ -27,7 +27,7 @@ static const u16 EXT[60] = {
 };
 
 static const mcfg CFG[] = {
-  [1] = { PE_FAST, 0 },  [20] = { PE_CM, 384 },  [23] = { PE_CM, 15 },
+  [1] = { PE_FAST, 0 },  [23] = { PE_CM, 15 },  [25] = { PE_CM, 128 },
 };
 #define NCFG ((int) ARRAY_LEN(CFG))
 
@@ -39,6 +39,7 @@ static const scfgt SCFG[] = {
   [34] = { SE_LS, 0x14034320 },  [36] = { SE_LS, 0x89bc320 },
   [37] = { SE_LS, 0x13fc320 },  [38] = { SE_LS, 0x17fc43c },
   [40] = { SE_LS, 0x17fc450 },  [41] = { SE_LS, 0x17fc3d0 },
+  [42] = { SE_LS, 0x14023a88 },
 };
 #define NSCFG ((int) ARRAY_LEN(SCFG))
 
@@ -46,6 +47,8 @@ int mod_sconfig(int scfg) {
   scfg -= MOD_SCFG0;
   return scfg >= 0 && scfg < NSCFG && SCFG[scfg].se != SE_NONE;
 }
+
+const scfgt * mod_scfg_get(int scfg) { return &SCFG[scfg - MOD_SCFG0]; }
 
 int mod_config(int cfg) {
   cfg -= MOD_CFG0;

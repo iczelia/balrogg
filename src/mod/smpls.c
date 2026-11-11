@@ -14,6 +14,21 @@
 
 
 #include "mod/mi.h"
+#include "sys/cpu.h"
+
+#if defined(HAVE_SSE2) && defined(__SSE2__)
+#include <emmintrin.h>
+#define LS_SSE2 1
+#else
+#define LS_SSE2 0
+#endif
+
+#if defined(BLR_CM_AVX2)
+#include <immintrin.h>
+#define LS_ONE smp_ls_one_avx2
+#else
+#define LS_ONE ls_one
+#endif
 
 typedef int64_t i64;
 
@@ -28,6 +43,7 @@ typedef int64_t i64;
 #define MHB 18
 #define MN 10
 #define MT 16
+#define MK 0x2F0F3A35u
 #define GN 4
 #define LN 16
 #define LMX ((i64) 1 << 24)
@@ -59,7 +75,7 @@ typedef struct {
   i32 hx[2 * HN], ef, es, eu, av[256], lw[LN], lu[LN];
   i64 A[NM][NM], L[NM][NM], lpw;
   u8 nr[256], rk[256], * kb;
-  u32 * kh;
+  u32 * kh, kr, km;
   sz kl, kc, kp;
   u32 cu[9][NQ], cv[9][NQ][10], cw[9][NQ][4], cx[9][NQ][16], cy[9][10][10],
       cz[9][NQ][NQ], cd[9][16][8], ce[NC][9][9][6], ch[9][4][9];
@@ -77,6 +93,7 @@ static int qlog(i32 e) {
   return MIN(q, NQ - 1);
 }
 
+#if !defined(BLR_CM_AVX2)
 static void wset(i32 * w, int n, int k) {
   int i;
   Fi(n + 1, w[i] = i < k ? 65536 / k : 0);
@@ -108,6 +125,8 @@ void * smp_ls_new(mx * m) {
   aset(z->pm[0][0][0], sizeof z->pm / sizeof (u16));
   aset(z->ps[0][0][0], sizeof z->ps / sizeof (u16));
   z->g.w[0] = 65536;
+  z->km = 1;
+  Fi(MN, z->km *= MK);
   if (o & O_MM) z->kh = xcalloc((sz) 1 << MHB, sizeof *z->kh);
   return z;
 }
@@ -117,12 +136,71 @@ void smp_ls_free(void * st) {
   xfree(z->kb);  xfree(z->kh);  xfree(z);
 }
 
+#endif
+
 static i64 cl64(i64 v, i64 b) { return v < -b ? -b : v > b ? b : v; }
+
+#if defined(BLR_CM_AVX2)
+#define LDV(p) _mm256_loadu_si256((const void *) (p))
+
+static INLINE i64 hs64(__m256i v) {
+  i64 t[2];
+  _mm_storeu_si128((void *) t, _mm_add_epi64(_mm256_castsi256_si128(v),
+                                             _mm256_extracti128_si256(v, 1)));
+  return t[0] + t[1];
+}
+
+static INLINE i64 dot32(const i32 * a, const i32 * b, int n) {
+  __m256i t = _mm256_setzero_si256();
+  i64 s;
+  int k;
+  for (k = 0; k + 8 <= n; k += 8)
+    t = _mm256_add_epi64(t, _mm256_add_epi64(
+          _mm256_mul_epi32(LDV(a + k), LDV(b + k)),
+          _mm256_mul_epi32(_mm256_srli_epi64(LDV(a + k), 32),
+                           _mm256_srli_epi64(LDV(b + k), 32))));
+  s = hs64(t);
+  for (; k < n; k++) s += (i64) a[k] * b[k];
+  return s;
+}
+
+static INLINE i64 dotl(const i64 * a, const i64 * b, int n) {
+  __m256i s0 = _mm256_setzero_si256(), s1 = s0;
+  int k;
+  for (k = 0; k + 8 <= n; k += 8) {
+    s0 = _mm256_add_epi64(s0, _mm256_mul_epi32(LDV(a + k), LDV(b + k)));
+    s1 = _mm256_add_epi64(s1, _mm256_mul_epi32(LDV(a + k + 4),
+                                               LDV(b + k + 4)));
+  }
+  for (; k < n; k += 4)
+    s0 = _mm256_add_epi64(s0, _mm256_mul_epi32(LDV(a + k), LDV(b + k)));
+  return hs64(_mm256_add_epi64(s0, s1));
+}
+
+static INLINE void rupd(i64 * r, i64 * rh, const i32 * h, int x, int n,
+                        int fs) {
+  const __m256i X = _mm256_set1_epi64x(x), Z = _mm256_setzero_si256();
+  const __m128i S = _mm_cvtsi32_si128(fs);
+  int k;
+  for (k = 0; k < n; k += 4) {
+    __m256i v = LDV(r + k), m = _mm256_cmpgt_epi64(Z, v),
+            p = _mm256_mul_epi32(_mm256_cvtepi32_epi64(
+                  _mm_loadu_si128((const void *) (h + k))), X);
+    _mm256_storeu_si256((void *) (rh + k), v);
+    m = _mm256_xor_si256(_mm256_srl_epi64(_mm256_xor_si256(v, m), S), m);
+    v = _mm256_add_epi64(v, _mm256_sub_epi64(_mm256_slli_epi64(p, 8), m));
+    _mm256_storeu_si256((void *) (r + k), v);
+  }
+}
+#endif
 
 static void ldl(sls * z, i64 * b, int n, i32 * w) {
   i64 (*A)[NM] = z->A, (*L)[NM] = z->L, D[NM], v[NM], y[NM], s, d,
       reg = (i64) 1 << (QS - RS), dmin = MAX(reg >> 2, 1);
   int i, j, k;
+#if defined(BLR_CM_AVX2)
+  memset(v, 0, sizeof v);
+#endif
   Fj(n,
     d = A[j][j] + reg;
     s = 0;
@@ -133,8 +211,12 @@ static void ldl(sls * z, i64 * b, int n, i32 * w) {
     D[j] = d = MAX(d, dmin);
     for (i = j + 1; i < n; i++) {
       i64 t = A[i][j];
+#if defined(BLR_CM_AVX2)
+      s = dotl(L[i], v, j);
+#else
       s = 0;
       Fk(j, s += L[i][k] * v[k]);
+#endif
       t = cl64(t - (s >> 16), (i64) 1 << 40);
       L[i][j] = cl64(t * 65536 / d, LMX);
     });
@@ -188,19 +270,31 @@ static void ols_upd(sls * z, const i32 * h) {
     Fj(3,
       Fk(j + 1,
         o->xl[k][j] += (i64) (g[k] * g[j]) * 256 - (o->xl[k][j] >> fs)));
+#if defined(BLR_CM_AVX2)
+    rupd(o->q, o->qh[o->rp], d, x, n + 3, fs);
+#else
     Fk(n + 3, o->qh[o->rp][k] = o->q[k]);
     Fk(n + 3, o->q[k] += (i64) (x * d[k]) * 256 - (o->q[k] >> fs));
+#endif
   }
+#if defined(BLR_CM_AVX2)
+  rupd(o->r, o->rh[o->rp], h, x, n + 1, fs);
+#else
   Fk(n + 1, o->rh[o->rp][k] = o->r[k]);
-  o->rp = (o->rp + 1) % n;
   Fk(n + 1, o->r[k] += (i64) (x * h[k]) * 256 - (o->r[k] >> fs));
+#endif
+  o->rp = (o->rp + 1) % n;
   if (++o->cnt >= 1 << o->kk) { o->cnt = 0;  solve(z); }
 }
 
 static i64 ols_pred(const ols * o, const i32 * h) {
-  i64 p = 0;
   int j;
+#if defined(BLR_CM_AVX2)
+  i64 p = dot32(o->w, h, o->n);
+#else
+  i64 p = 0;
   Fj(o->n, p += (i64) o->w[j] * h[j]);
+#endif
   if (o->lp) Fj(3, p += (i64) o->w[o->n + j] * h[o->lp - 2 + j]);
   return p;
 }
@@ -263,29 +357,40 @@ static int sbit(mx * m, u32 * c0, u32 * c1, int bit) {
   return bit;
 }
 
-static u32 mhash(const u8 * b) {
-  u32 h = 0;
-  int i;
-  Fi(MN, h = (h + b[i] + 1) * 0x2F0F3A35u);
-  return h >> (32 - MHB);
+static int mrun(const u8 * a, const u8 * b, u32 c) {
+  int k = 0;
+#if LS_SSE2
+  if (c >= 32) {
+    u32 e = (u32) _mm_movemask_epi8(_mm_cmpeq_epi8(
+              _mm_loadu_si128((const void *) (a - 32)),
+              _mm_loadu_si128((const void *) (b - 32)))) |
+            (u32) _mm_movemask_epi8(_mm_cmpeq_epi8(
+              _mm_loadu_si128((const void *) (a - 16)),
+              _mm_loadu_si128((const void *) (b - 16)))) << 16;
+    return 32 - (int) blr_ilog(~e);
+  }
+#endif
+  while (k < 32 && (u32) k < c && a[-1 - k] == b[-1 - k]) k++;
+  return k;
 }
 
 static void mput(sls * z, int x) {
   u32 c, hh;
-  int k = 0;
+  int k;
   if (z->mlen) {
     if (z->kb[z->kp] == (u8) x) {
       z->mlen = MIN(z->mlen + 1, 65535);  z->kp++;
     } else z->mlen = 0;
   }
   z->kb[z->kl++] = (u8) x;
+  if (z->kl > MN) z->kr -= (z->kb[z->kl - 1 - MN] + 1u) * z->km;
+  z->kr = (z->kr + (u8) x + 1) * MK;
   if (z->kl < MN) return;
-  hh = mhash(z->kb + z->kl - MN);
+  hh = z->kr >> (32 - MHB);
   c = z->kh[hh];
   z->kh[hh] = (u32) z->kl;
   if (z->mlen || !c) return;
-  while (k < 32 && (u32) k < c && z->kb[c - 1 - k] == z->kb[z->kl - 1 - k])
-    k++;
+  k = mrun(z->kb + c, z->kb + z->kl, c);
   if (k >= MN) { z->kp = c;  z->mlen = k; }
 }
 
@@ -381,9 +486,13 @@ static void setlag(mx * m, sls * z, const u8 * src, sz n) {
 }
 
 static i64 lms(sls * z) {
+#if defined(BLR_CM_AVX2)
+  i64 a = dot32(z->lw, z->lu, LN);
+#else
   i64 a = 0;
   int j;
   Fj(LN, a += (i64) z->lw[j] * z->lu[j]);
+#endif
   return cl64(a >> 16, 1 << 14);
 }
 
@@ -399,7 +508,13 @@ static void lms_upd(sls * z, i32 tg, i32 lp) {
   z->lu[0] = tg;
 }
 
-void smp_ls_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
+void smp_ls_one_avx2(mx * m, void * st, int si, const u8 * src, u8 * dst,
+                     sz n);
+
+#if !defined(BLR_CM_AVX2)
+static
+#endif
+void LS_ONE(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
   sls * z = st;
   const u32 o = z->opt;
   sz i;
@@ -562,3 +677,12 @@ void smp_ls_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
     if (o & O_GN) gls_upd(z, gu, x * 16);
     if (o & O_LM) lms_upd(z, (i32) cl64(x * 16 - (po >> 12), 1 << 14), lp));
 }
+
+#if !defined(BLR_CM_AVX2)
+void smp_ls_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
+#if defined(HAVE_AVX2)
+  if (blr_cpu_avx2()) { smp_ls_one_avx2(m, st, si, src, dst, n);  return; }
+#endif
+  ls_one(m, st, si, src, dst, n);
+}
+#endif

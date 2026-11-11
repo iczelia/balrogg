@@ -48,7 +48,9 @@ BLR_OPUS_PARSE = \
 BLR_MOD = src/mod/mod.c src/mod/lay.c src/mod/code.c src/mod/patfast.c \
   src/mod/patcm.c src/mod/smpfast.c src/mod/smpls.c \
   src/mod/lstm.c src/mod/lstmw.c
-BLR_SOURCES = $(BLR_SYS) $(BLR_CODER) $(BLR_FMT) $(BLR_VORBIS) $(BLR_OPUS) $(BLR_MP3) $(BLR_MOD) $(BLR_OPUS_PARSE)
+BLR_IT_PARTS = src/it/st.c src/it/pt.c
+BLR_IT = src/it/it.c src/it/lay.c src/it/code.c src/it/s16.c src/it/itz.c
+BLR_SOURCES = $(BLR_SYS) $(BLR_CODER) $(BLR_FMT) $(BLR_VORBIS) $(BLR_OPUS) $(BLR_MP3) $(BLR_MOD) $(BLR_IT) $(BLR_OPUS_PARSE)
 if BLR_IS_WINDOWS
 BLR_SOURCES += src/sys/win32.c
 endif
@@ -62,7 +64,7 @@ noinst_HEADERS = \
   src/opus/opus.h src/opus/acm.h src/opus/cwrs.h src/opus/ent.h \
   src/mp3/mp3.h src/mp3/z.h src/mp3/zbase.h src/mp3/zc.h src/mp3/zcoef.h src/mp3/zframe.h src/mp3/zhdr.h \
   src/mp3/zlayer.h src/mp3/zmframe.h src/mp3/zmodel.h src/mp3/znames.h src/mp3/zrc.h src/mp3/ztab.h \
-  src/mod/mod.h src/mod/mi.h src/mod/lstm.h \
+  src/mod/mod.h src/mod/mi.h src/mod/lstm.h src/it/it.h src/it/ii.h src/it/itz.h \
   src/opus/parse/opusdec.h src/opus/parse/celt.h src/opus/parse/silk.h src/opus/parse/arch.h \
   src/opus/parse/opus_types.h src/opus/parse/opus_defines.h src/opus/parse/os_support.h \
   src/opus/parse/ecintrin.h src/opus/parse/entcode.h src/opus/parse/entdec.h \
@@ -83,7 +85,8 @@ BLR_LIBS += libbalrogg_sse2.a
 endif
 if BLR_AVX2
 noinst_LIBRARIES += libbalrogg_avx2.a
-libbalrogg_avx2_a_SOURCES  = src/coder/cmmix.c src/coder/acmmix.c
+libbalrogg_avx2_a_SOURCES  = src/coder/cmmix.c src/coder/acmmix.c \
+                             src/mod/smpfast.c src/mod/smpls.c src/it/s16.c
 libbalrogg_avx2_a_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_CM_AVX2
 libbalrogg_avx2_a_CFLAGS   = $(AM_CFLAGS) $(BLR_AVX2_CFLAGS)
 BLR_LIBS += libbalrogg_avx2.a
@@ -154,7 +157,9 @@ balrogg_prof_LDADD += libbalrogg_prof_sse2.a
 endif
 if BLR_AVX2
 noinst_LIBRARIES += libbalrogg_prof_avx2.a
-libbalrogg_prof_avx2_a_SOURCES  = src/coder/cmmix.c src/coder/acmmix.c
+libbalrogg_prof_avx2_a_SOURCES  = src/coder/cmmix.c src/coder/acmmix.c \
+                                  src/mod/smpfast.c src/mod/smpls.c \
+                                  src/it/s16.c
 libbalrogg_prof_avx2_a_CPPFLAGS = $(AM_CPPFLAGS) -DBLR_PROFILE -DBLR_CM_AVX2
 libbalrogg_prof_avx2_a_CFLAGS   = $(AM_CFLAGS) $(BLR_AVX2_CFLAGS)
 balrogg_prof_LDADD += libbalrogg_prof_avx2.a
@@ -212,7 +217,7 @@ BLR_TEST_BINARY = $(abs_top_builddir)/balrogg$(EXEEXT)
 EXTRA_DIST = \
   bootstrap build-aux/version.sh README.md src/balrogg.rc src/balrogg.ico \
   src/opus/parse/README src/opus/parse/COPYING \
-  $(BLR_VORBIS_PARTS) $(BLR_OPUS_PARTS) $(BLR_MP3_PARTS) \
+  $(BLR_VORBIS_PARTS) $(BLR_OPUS_PARTS) $(BLR_MP3_PARTS) $(BLR_IT_PARTS) \
   tests/t_harness.h tests/strayfree.sh tests/data tests/regress \
   fuzz/harness.h fuzz/fzcfg.h fuzz/fuzz_dec.c fuzz/fuzz_enc.c \
   fuzz/fuzz_ogg.c fuzz/fuzz_opus.c fuzz/fuzz_odec.c fuzz/fuzz_mp3.c fuzz/fuzz_mdec.c \

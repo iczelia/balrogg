@@ -15,7 +15,15 @@
 
 #include "mod/mi.h"
 #include "coder/squash.h"
+#include "sys/cpu.h"
 #include <string.h>
+
+#if defined(BLR_CM_AVX2)
+#include <immintrin.h>
+#define SF_ONE smp_fast_one_avx2
+#else
+#define SF_ONE fast_one
+#endif
 
 #if defined(HAVE_SSE2) && defined(__SSE2__)
 #include <emmintrin.h>
@@ -52,6 +60,7 @@ typedef struct {
   u32 opt;
 } sfz;
 
+#if !defined(BLR_CM_AVX2)
 void * smp_fast_new(mx * m) {
   sfz * z;
   int i, j;
@@ -73,6 +82,8 @@ void smp_fast_free(void * st) {
   xfree(st);
 }
 
+#endif
+
 static INLINE int clip8(int v) { return CLAMP(v, -128, 127); }
 
 enum {
@@ -80,17 +91,32 @@ enum {
   F_MG = 128, F_MR = 256, F_CD = 512, F_MX = 1024, F_S4 = 2048
 };
 
+#if SF_SSE2
+#define LD4(p) _mm_loadu_si128((const void *) (p))
+
+static INLINE u32 hsum4(__m128i t) {
+  t = _mm_add_epi32(t, _mm_shuffle_epi32(t, 0x4E));
+  t = _mm_add_epi32(t, _mm_shuffle_epi32(t, 0xB1));
+  return (u32) _mm_cvtsi128_si32(t);
+}
+#endif
+
+#if defined(BLR_CM_AVX2)
+static INLINE u32 hsum8(__m256i t) {
+  return hsum4(_mm_add_epi32(_mm256_castsi256_si128(t),
+                             _mm256_extracti128_si256(t, 1)));
+}
+
+#define LD8(p) _mm256_loadu_si256((const void *) (p))
+#endif
+
 static INLINE int vdot(const i16 * w, const i16 * h, const int n) {
   int j;
 #if SF_SSE2
   __m128i t = _mm_setzero_si128();
   for (j = 0; j < n; j += 8)
-    t = _mm_add_epi32(t,
-      _mm_madd_epi16(_mm_loadu_si128((const void *) (w + j)),
-                     _mm_loadu_si128((const void *) (h + j))));
-  t = _mm_add_epi32(t, _mm_shuffle_epi32(t, 0x4E));
-  t = _mm_add_epi32(t, _mm_shuffle_epi32(t, 0xB1));
-  return _mm_cvtsi128_si32(t);
+    t = _mm_add_epi32(t, _mm_madd_epi16(LD4(w + j), LD4(h + j)));
+  return (int) hsum4(t);
 #else
   u32 t = 0;
   Fj(n, t += (u32) (w[j] * h[j]));
@@ -98,21 +124,85 @@ static INLINE int vdot(const i16 * w, const i16 * h, const int n) {
 #endif
 }
 
-static INLINE void vadd(i16 * w, const i16 * d, const int n, int sg) {
-  int j;
-#if SF_SSE2
-  __m128i k = _mm_set1_epi16((short) sg);
-  for (j = 0; j < n; j += 8)
-    _mm_storeu_si128((void *) (w + j),
-      _mm_add_epi16(_mm_loadu_si128((const void *) (w + j)),
-        _mm_mullo_epi16(_mm_loadu_si128((const void *) (d + j)), k)));
-#else
-  Fj(n, w[j] = (i16) (w[j] + d[j] * sg));
+static INLINE int vlong(i16 * w, const i16 * d, const i16 * h, const int n,
+                        int sg) {
+  int j = 0;
+  u32 t = 0;
+#if defined(BLR_CM_AVX2)
+  {
+    __m256i k = _mm256_set1_epi16((short) sg), a = _mm256_setzero_si256();
+    for (; j + 16 <= n; j += 16) {
+      __m256i x = _mm256_add_epi16(LD8(w + j),
+                                   _mm256_mullo_epi16(LD8(d + j), k));
+      _mm256_storeu_si256((void *) (w + j), x);
+      a = _mm256_add_epi32(a, _mm256_madd_epi16(x, LD8(h + j)));
+    }
+    t = hsum8(a);
+  }
 #endif
+#if SF_SSE2
+  {
+    __m128i k = _mm_set1_epi16((short) sg), a = _mm_setzero_si128();
+    for (; j < n; j += 8) {
+      __m128i x = _mm_add_epi16(LD4(w + j), _mm_mullo_epi16(LD4(d + j), k));
+      _mm_storeu_si128((void *) (w + j), x);
+      a = _mm_add_epi32(a, _mm_madd_epi16(x, LD4(h + j)));
+    }
+    t += hsum4(a);
+  }
+#else
+  Fj(n,
+    w[j] = (i16) (w[j] + d[j] * sg);
+    t += (u32) (w[j] * h[j]));
+#endif
+  return (int) t;
+}
+
+static INLINE int vshort(i16 * w, const i16 * d, const i16 * h, const int n,
+                         int sg) {
+  int j = 0;
+  u32 t = 0, e = 0;
+#if defined(BLR_CM_AVX2)
+  {
+    __m256i k = _mm256_set1_epi16((short) sg), a = _mm256_setzero_si256(),
+            b = a;
+    for (; j + 16 <= n; j += 16) {
+      __m256i x = LD8(w + j), y = LD8(d + j), z = LD8(h + j);
+      a = _mm256_add_epi32(a, _mm256_madd_epi16(x, z));
+      b = _mm256_add_epi32(b, _mm256_madd_epi16(y, z));
+      _mm256_storeu_si256((void *) (w + j),
+                          _mm256_add_epi16(x, _mm256_mullo_epi16(y, k)));
+    }
+    t = hsum8(a);  e = hsum8(b);
+  }
+#endif
+#if SF_SSE2
+  {
+    __m128i k = _mm_set1_epi16((short) sg), a = _mm_setzero_si128(), b = a;
+    for (; j < n; j += 8) {
+      __m128i x = LD4(w + j), y = LD4(d + j), z = LD4(h + j);
+      a = _mm_add_epi32(a, _mm_madd_epi16(x, z));
+      b = _mm_add_epi32(b, _mm_madd_epi16(y, z));
+      _mm_storeu_si128((void *) (w + j),
+                       _mm_add_epi16(x, _mm_mullo_epi16(y, k)));
+    }
+    t += hsum4(a);  e += hsum4(b);
+  }
+#else
+  Fj(n,
+    t += (u32) (w[j] * h[j]);
+    e += (u32) (d[j] * h[j]);
+    w[j] = (i16) (w[j] + d[j] * sg));
+#endif
+  return (int) (t + (u32) sg * e);
 }
 
 static INLINE void vpush(i16 * h, int q, int v) {
-#if SF_SSE2
+#if defined(BLR_CM_AVX2)
+  __m256i x = LD8(h + q + 1);
+  x = _mm256_alignr_epi8(x, _mm256_permute2x128_si256(x, x, 0x08), 14);
+  _mm256_storeu_si256((void *) (h + q), _mm256_insert_epi16(x, (short) v, 0));
+#elif SF_SSE2
   __m128i x = _mm_slli_si128(_mm_loadu_si128((const void *) (h + q + 1)), 2);
   _mm_storeu_si128((void *) (h + q), _mm_insert_epi16(x, v, 0));
 #else
@@ -124,8 +214,7 @@ static INLINE int nn_step(nnr * f, int * e, int pk, const int n,
                           const int mu) {
   int u = *e, pe = mu < 0 ? pk >> 2 : pk, am = ABS(mu),
       r = CLAMP(u - ((int) ((u32) pe + 2048) >> 12), -2048, 2047),
-      q = f->q, ai = ABS(u), c, sg = (r > 0) - (r < 0);
-  u32 t, d;
+      q = f->q, ai = ABS(u), c, sg = (r > 0) - (r < 0), t;
   c = ai * 16 > 3 * f->avg ? 4 * am : ai * 48 > 4 * f->avg ? 2 * am :
       ai ? am : 0;
   f->avg += ai - (f->avg >> 4);
@@ -137,16 +226,10 @@ static INLINE int nn_step(nnr * f, int * e, int pk, const int n,
   f->q = --q;
   vpush(f->h, q, u);
   *e = r;
-  if (n >= NNLONG) {
-    vadd(f->w, f->ad + q + 1, n, sg);
-    vpush(f->ad, q, u > 0 ? c : -c);
-    return vdot(f->w, f->h + q, n);
-  }
-  t = (u32) vdot(f->w, f->h + q, n);
-  d = (u32) vdot(f->ad + q + 1, f->h + q, n);
-  vadd(f->w, f->ad + q + 1, n, sg);
+  t = n >= NNLONG ? vlong(f->w, f->ad + q + 1, f->h + q, n, sg)
+                  : vshort(f->w, f->ad + q + 1, f->h + q, n, sg);
   vpush(f->ad, q, u > 0 ? c : -c);
-  return (int) (t + (u32) sg * d);
+  return t;
 }
 
 typedef struct { u32 lo, rg, cd;  int cy; } lrc;
@@ -465,7 +548,13 @@ static INLINE void eng(mx * m, sfz * z, const u8 * src, u8 * dst, sz n,
 #define FH (F_CD | F_SG | F_FR | F_SD | F_MT | F_MM)
 #define FM (F_MS | F_MG | F_CD | F_S4)
 
-void smp_fast_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
+void smp_fast_one_avx2(mx * m, void * st, int si, const u8 * src, u8 * dst,
+                       sz n);
+
+#if !defined(BLR_CM_AVX2)
+static
+#endif
+void SF_ONE(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
   sfz * z = st;
   (void) si;
   switch (z->opt) {
@@ -480,3 +569,13 @@ void smp_fast_one(mx * m, void * st, int si, const u8 * src, u8 * dst, sz n) {
   default: ENG(F_MS | F_MG | F_MR, 0, 0, 0, 0, 0, 0);
   }
 }
+
+#if !defined(BLR_CM_AVX2)
+void smp_fast_one(mx * m, void * st, int si, const u8 * src, u8 * dst,
+                  sz n) {
+#if defined(HAVE_AVX2)
+  if (blr_cpu_avx2()) { smp_fast_one_avx2(m, st, si, src, dst, n);  return; }
+#endif
+  fast_one(m, st, si, src, dst, n);
+}
+#endif
