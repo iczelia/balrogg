@@ -1,7 +1,7 @@
 Release notes for balrogg. See the git log, or ChangeLog in a release package, for
 source-level changes.
 
-v1.6 (??-??-????)
+v1.6 (12-11-2026)
 - Performance improvements.
 - Compression ratio improvements.
 - Mp3 recompression.
