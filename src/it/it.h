@@ -25,9 +25,16 @@
 #define IT_MAXROW 1024
 #define IT_STC0   700
 #define IT_S16C0  800
+#define S3_HDR    0x60
+#define S3_INS    0x50
+#define XM_SIG    17
+#define XM_HDR    80
+#define XM_INS    263
+#define XM_SHD    40
 
 enum { IK_INS, IK_SHD, IK_PAT, IK_SMP, IK_MSG, IK_N };
 enum { IS_NONE, IS_PRI, IS_ZERO, IS_ALIAS, IS_RAW, IS_N };
+enum { IT_FIT = 1, IT_FS3M, IT_FXM };
 
 typedef struct {
   u8 k, st;
@@ -42,6 +49,7 @@ typedef struct {
   it_ent * e;
   u32 * ord, np;
   sz clip;
+  int f;
 } it_lay;
 
 static INLINE u32 it_eshd(const it_lay * L, u32 i) { return L->inn + i; }
@@ -57,10 +65,15 @@ static INLINE u32 it_emsg(const it_lay * L) {
 
 int it_kind(const u8 * b, sz n);
 sz it_tab(const u8 * h);
-void it_lay_init(it_lay * L, const u8 * h, sz n);
+sz it_tab3(const u8 * h);
+void it_lay_init(it_lay * L, const u8 * h, sz n, int f);
 void it_lay_free(it_lay * L);
-int it_smp_has(const u8 * s);
-uint64_t it_smp_raw(const u8 * s);
+int it_smp_has(int f, const u8 * s);
+int it_smp_cmp(int f, const u8 * s);
+u32 it_smp_fr(int f, const u8 * s);
+int it_smp_b16(int f, const u8 * s);
+uint64_t it_smp_raw(int f, const u8 * s);
+void it_smp_set(int f, u8 * s, u32 v);
 uint64_t it_smp_comp(const u8 * b, sz n, sz at, const u8 * s);
 void it_parse(it_lay * L, const u8 * b);
 void it_offsets(const it_lay * L, u8 * h);
@@ -68,13 +81,13 @@ void it_offsets(const it_lay * L, u8 * h);
 typedef struct { int s8, s16, st; } it_cfg;
 
 int it_cfg_ok(const it_cfg * c);
-void it_level(int level, it_cfg * c);
+void it_level(int level, int f, it_cfg * c);
 sz it_code(const u8 * b, sz n, const it_cfg * c, u8 ** out);
-int it_decode(const u8 * a, sz alen, sz n, int s8, u8 * out);
+int it_decode(const u8 * a, sz alen, sz n, int s8, int f, u8 * out);
 
 int it_sniff(const char * path);
 int it_is_archive(const char * path);
-int it_pack(const char * in, const char * out, const it_cfg * c);
+int it_pack(const char * in, const char * out, const it_cfg * c, int f);
 int it_unpack(const char * in, const char * out);
 
 #endif

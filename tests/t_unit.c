@@ -809,13 +809,239 @@ static void t_it(void) {
       if (!it_cfg_ok(&c)) continue;
       al = it_code(b, n, &c, &a);
       memset(o, 0xA5, n);
-      CHECK(!it_decode(a, al, n, c.s8, o) && !memcmp(o, b, n),
+      CHECK(!it_decode(a, al, n, c.s8, IT_FIT, o) && !memcmp(o, b, n),
             "synthetic IT %d round-trips with configuration %d/%d/%d", v,
             c.s8, c.s16, c.st);
       Fi(3,
         memcpy(o, a, al);
         o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
-        (void) it_decode(o, al, n, c.s8, w));
+        (void) it_decode(o, al, n, c.s8, IT_FIT, w));
+      xfree(a);
+    }
+  }
+  xfree(b);  xfree(o);  xfree(w);
+}
+
+static sz t_s3m_pat(u8 * b, int bad, int st3) {
+  sz q = 2;
+  u32 r;
+  int c;
+  for (r = 0; r < 64; r++) {
+    if (bad && r == 3) {
+      b[q++] = 0x44;  b[q++] = 30;  b[q++] = 0x42;  b[q++] = 20;
+    } else
+      for (c = 0; c < 8; c++) {
+        u8 fl = (u8) (xt_next(&rng, 8) << 5);
+        if (xt_next(&rng, 3) || (!fl && !c)) continue;
+        b[q++] = (u8) (fl | c);
+        if (fl & 0x20) {
+          u32 o = xt_next(&rng, 8), k = xt_next(&rng, 14);
+          b[q++] = (u8) (k == 12 ? 254 : k == 13 ? 255 : o << 4 | k);
+          b[q++] = (u8) (1 + xt_next(&rng, 4));
+        }
+        if (fl & 0x40) b[q++] = (u8) xt_next(&rng, 65);
+        if (fl & 0x80) {
+          b[q++] = (u8) (1 + xt_next(&rng, 26));
+          b[q++] = (u8) xt_next(&rng, 256);
+        }
+      }
+    b[q++] = 0;
+  }
+  wr16le(b, (u32) (st3 ? q : q - 2));
+  return q;
+}
+
+static sz t_s3m_make(u8 * b, int v) {
+  static const u8 ty[5] = { 1, 1, 1, 2, 0 }, fl[5] = { 1, 4, 2, 0, 0 };
+  static const u32 fr[5] = { 300, 200, 150, 0, 0 };
+  const sz on = 6, ni = 5, np = 3, t0 = S3_HDR + on;
+  sz n = t0 + 2 * (ni + np) + (v == 1 ? 0 : 32), io[5], so[3], i, k;
+  memset(b, 0, 1 << 16);
+  memcpy(b, "synthetic s3m", 13);  b[0x1C] = 0x1A;  b[0x1D] = 16;
+  wr16le(b + 0x20, (u32) on);  wr16le(b + 0x22, (u32) ni);
+  wr16le(b + 0x24, (u32) np);  wr16le(b + 0x28, 0x1320);
+  wr16le(b + 0x2A, v == 1 ? 1 : 2);  memcpy(b + 0x2C, "SCRM", 4);
+  b[0x30] = 64;  b[0x31] = 6;  b[0x32] = 125;  b[0x33] = 176;
+  b[0x35] = v == 1 ? 0 : 0xFC;
+  Fi(32, b[0x40 + i] = (u8) (i < 8 ? i : 255));
+  Fi(on, b[S3_HDR + i] = (u8) (i < 2 ? i : i == 2 ? 254 : i == 3 ? 2 : 255));
+  if (v != 1) Fi(32, b[t0 + 2 * (ni + np) + i] = (u8) (i < 8 ? 0x23 : 0));
+  Fi(ni,
+    u8 * s;
+    n = (n + 15) & ~(sz) 15;
+    s = b + n;  io[i] = n;
+    s[0] = ty[i];  memcpy(s + 1, "SAMPLE.SMP", 10);
+    if (ty[i] == 1) {
+      wr32le(s + 0x10, fr[i]);  wr32le(s + 0x18, fr[i]);
+      s[0x1F] = (u8) (fl[i] | (i == 0));
+    } else if (ty[i] == 2) Fk(12, s[0x10 + k] = (u8) (k * 17));
+    s[0x1C] = 48;  wr32le(s + 0x20, 8363);
+    memcpy(s + 0x30, "instrument", 10);
+    memcpy(s + 0x4C, ty[i] == 2 ? "SCRI" : "SCRS", 4);
+    wr16le(b + t0 + 2 * i, (u32) (n >> 4));
+    n += S3_INS);
+  Fi(np,
+    n = (n + 15) & ~(sz) 15;
+    if (v == 2 && i == 2) continue;
+    wr16le(b + t0 + 2 * (ni + i), (u32) (n >> 4));
+    n += t_s3m_pat(b + n, i == 1, v != 1));
+  if (v == 1) { memcpy(b + n, "junk", 4);  n += 4; }
+  Fi(3,
+    sz j = v == 2 && i == 2 ? 0 : i, len = fr[j] * (j ? 2 : 1);
+    u8 * s = b + io[i];
+    n = (n + 15) & ~(sz) 15;
+    so[i] = j == i ? n : so[j];
+    s[0x0D] = (u8) (so[i] >> 20);  wr16le(s + 0x0E, (u32) (so[i] >> 4));
+    if (j != i) continue;
+    Fk(len, b[n + k] = (u8) (k * 7 % 241 + xt_next(&rng, 3)));
+    n += len);
+  if (v == 1) n -= 40;
+  return n;
+}
+
+static void t_s3m(void) {
+  u8 * b = xmalloc(1 << 16), * o = xmalloc(1 << 16), * w = xmalloc(1 << 16),
+     * a;
+  int v, k;
+  xt_section_begin("S3M layout and round trip");
+  for (v = 0; v < 3; v++) {
+    sz n = t_s3m_make(b, v), al, i;
+    CHECK(it_kind(b, n) == IT_FS3M, "synthetic S3M %d is recognised", v);
+    if (it_kind(b, n) != IT_FS3M) continue;
+    for (k = 0; k < 40; k++) {
+      it_cfg c;
+      c.s8 = MOD_SCFG0 + (k < 20 ? 2 * k : 12);
+      c.st = IT_STC0 + (k < 20 ? 1 : 1 + (k - 20) % 4);
+      c.s16 = IT_S16C0 + (k < 20 ? 1 : k - 20);
+      if (!it_cfg_ok(&c)) continue;
+      al = it_code(b, n, &c, &a);
+      memset(o, 0xA5, n);
+      CHECK(!it_decode(a, al, n, c.s8, IT_FS3M, o) && !memcmp(o, b, n),
+            "synthetic S3M %d round-trips with configuration %d/%d/%d", v,
+            c.s8, c.s16, c.st);
+      Fi(3,
+        memcpy(o, a, al);
+        o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
+        (void) it_decode(o, al, n, c.s8, IT_FS3M, w));
+      CHECK(it_decode(a, al / 2, n, c.s8, IT_FS3M, w) ||
+            memcmp(w, b, n), "truncated S3M archive %d is not accepted", v);
+      xfree(a);
+    }
+  }
+  xfree(b);  xfree(o);  xfree(w);
+}
+
+static sz t_xm_pat(u8 * b, u32 rows, int kind) {
+  sz q = 9;
+  u32 r, c;
+  int j;
+  wr32le(b, 9);  b[4] = 0;  wr16le(b + 5, rows);
+  for (r = 0; r < rows && kind != 1; r++)
+    for (c = 0; c < 4; c++) {
+      u8 f[5], m = 0;
+      f[0] = (u8) (xt_next(&rng, 3) ? 0 : 1 + xt_next(&rng, 97));
+      f[1] = (u8) (f[0] && xt_next(&rng, 2) ? 1 + xt_next(&rng, 3) : 0);
+      f[2] = (u8) (xt_next(&rng, 4) ? 0 : 0x10 + xt_next(&rng, 0x41));
+      f[3] = (u8) (xt_next(&rng, 3) ? 0 : xt_next(&rng, 36));
+      f[4] = (u8) (f[3] || !xt_next(&rng, 8) ? xt_next(&rng, 256) : 0);
+      if (!xt_next(&rng, 5)) Fj(5, f[j] = (u8) (1 + xt_next(&rng, 90)));
+      Fj(5, m |= (u8) ((f[j] != 0) << j));
+      if (m == 31 || !xt_next(&rng, 9)) {
+        memcpy(b + q, f, 5);  q += 5;
+        continue;
+      }
+      if (!xt_next(&rng, 7)) m |= (u8) (1 << xt_next(&rng, 5));
+      b[q++] = (u8) (0x80 | m);
+      Fj(5, if (m >> j & 1) b[q++] = f[j]);
+    }
+  if (kind == 2) b[q++] = 0x55;
+  wr16le(b + 7, (u32) (q - 9));
+  return q;
+}
+
+static const u8 XNS[3] = { 2, 0, 2 }, XTY[3][2] = { { 1, 16 }, { 0, 0 },
+                                                    { 2, 48 } };
+static const u32 XSL[3][2] = { { 300, 401 }, { 0, 0 }, { 120, 360 } };
+
+static sz t_xm_ins(u8 * t, u32 i) {
+  sz is = XNS[i] ? 263 : 29, j;
+  wr32le(t, (u32) is);  memcpy(t + 4, "instrument", 10);
+  wr16le(t + 27, XNS[i]);
+  if (XNS[i]) {
+    wr32le(t + 29, 40);
+    Fj(96, t[33 + j] = (u8) (j >= 48));
+    Fj(6, wr16le(t + 129 + 4 * j, (u32) (8 * j));
+          wr16le(t + 131 + 4 * j, (u32) (64 - 10 * j)));
+    t[225] = 6;  t[233] = 1;  wr16le(t + 239, 256);
+  }
+  Fj(XNS[i],
+    u8 * s = t + is + XM_SHD * j;
+    wr32le(s, XSL[i][j]);  s[12] = 64;  s[14] = XTY[i][j];
+    s[15] = 128;  s[16] = (u8) (j * 12);
+    memcpy(s + 18, "sample", 6));
+  return is + XM_SHD * XNS[i];
+}
+
+static sz t_xm_data(u8 * t, u32 i) {
+  sz n = 0, j, k;
+  Fj(XNS[i],
+    Fk(XSL[i][j], t[n + k] = (u8) (k % 7 + xt_next(&rng, 3)));
+    n += XSL[i][j]);
+  return n;
+}
+
+static sz t_xm_make(u8 * b, int v) {
+  const u32 hs = v == 1 ? 280 : 276;
+  sz n = 60 + hs;
+  u32 i;
+  memset(b, 0, 1 << 16);
+  memcpy(b, "Extended Module: synthetic xm", 29);  b[37] = 0x1A;
+  memcpy(b + 38, "FastTracker v2.00   ", 20);
+  wr16le(b + 58, v == 2 ? 0x103 : 0x104);  wr32le(b + 60, hs);
+  wr16le(b + 64, 4);  wr16le(b + 68, 4);  wr16le(b + 70, 3);
+  wr16le(b + 72, 3);  wr16le(b + 74, 1);  wr16le(b + 76, 6);
+  wr16le(b + 78, 125);
+  Fi(4, b[80 + i] = (u8) (i & 1 ? 2 : i / 2));
+  if (v == 1) memcpy(b + 336, "junk", 4);
+  if (v != 2) Fi(3, n += t_xm_pat(b + n, i == 1 ? 64 : 16 + 8 * i, (int) i));
+  Fi(3,
+    n += t_xm_ins(b + n, i);
+    if (v != 2) n += t_xm_data(b + n, i));
+  if (v == 2) {
+    Fi(3, n += t_xm_pat(b + n, i == 1 ? 64 : 16 + 8 * i, (int) i));
+    Fi(3, n += t_xm_data(b + n, i));
+    n -= 70;
+  }
+  if (v == 1) { memcpy(b + n, "trailing", 8);  n += 8; }
+  return n;
+}
+
+static void t_xm(void) {
+  u8 * b = xmalloc(1 << 16), * o = xmalloc(1 << 16), * w = xmalloc(1 << 16),
+     * a;
+  int v, k;
+  xt_section_begin("XM layout and round trip");
+  for (v = 0; v < 3; v++) {
+    sz n = t_xm_make(b, v), al, i;
+    CHECK(it_kind(b, n) == IT_FXM, "synthetic XM %d is recognised", v);
+    if (it_kind(b, n) != IT_FXM) continue;
+    for (k = 0; k < 40; k++) {
+      it_cfg c;
+      c.s8 = MOD_SCFG0 + (k < 20 ? 2 * k : 12);
+      c.st = IT_STC0 + (k < 20 ? 1 : 1 + (k - 20) % 4);
+      c.s16 = IT_S16C0 + (k < 20 ? 1 : k - 20);
+      if (!it_cfg_ok(&c)) continue;
+      al = it_code(b, n, &c, &a);
+      memset(o, 0xA5, n);
+      CHECK(!it_decode(a, al, n, c.s8, IT_FXM, o) && !memcmp(o, b, n),
+            "synthetic XM %d round-trips with configuration %d/%d/%d", v,
+            c.s8, c.s16, c.st);
+      Fi(3,
+        memcpy(o, a, al);
+        o[xt_next(&rng, (u32) al)] ^= (u8) (1 + xt_next(&rng, 255));
+        (void) it_decode(o, al, n, c.s8, IT_FXM, w));
+      CHECK(it_decode(a, al / 2, n, c.s8, IT_FXM, w) ||
+            memcmp(w, b, n), "truncated XM archive %d is not accepted", v);
       xfree(a);
     }
   }
@@ -845,6 +1071,8 @@ void xt_run_unit(void) {
   t_model();
   t_mod();
   t_it();
+  t_s3m();
+  t_xm();
   t_training_direction(cm_plain_scalar, "scalar training direction");
 #if defined(HAVE_SSE2)
   if (blr_cpu_sse2())

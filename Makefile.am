@@ -48,7 +48,7 @@ BLR_OPUS_PARSE = \
 BLR_MOD = src/mod/mod.c src/mod/lay.c src/mod/code.c src/mod/patfast.c \
   src/mod/patcm.c src/mod/smpfast.c src/mod/smpls.c \
   src/mod/lstm.c src/mod/lstmw.c
-BLR_IT_PARTS = src/it/st.c src/it/pt.c
+BLR_IT_PARTS = src/it/st.c src/it/pt.c src/it/xm.c
 BLR_IT = src/it/it.c src/it/lay.c src/it/code.c src/it/s16.c src/it/itz.c
 BLR_SOURCES = $(BLR_SYS) $(BLR_CODER) $(BLR_FMT) $(BLR_VORBIS) $(BLR_OPUS) $(BLR_MP3) $(BLR_MOD) $(BLR_IT) $(BLR_OPUS_PARSE)
 if BLR_IS_WINDOWS

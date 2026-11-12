@@ -19,16 +19,33 @@ sz it_tab(const u8 * h) {
          4 * ((sz) rd16le(h + 0x22) + rd16le(h + 0x24) + rd16le(h + 0x26));
 }
 
-int it_kind(const u8 * b, sz n) {
-  return n >= IT_HDR && !memcmp(b, "IMPM", 4) && it_tab(b) <= n;
+sz it_tab3(const u8 * h) {
+  return S3_HDR + rd16le(h + 0x20) +
+         2 * ((sz) rd16le(h + 0x22) + rd16le(h + 0x24)) +
+         (h[0x35] == 0xFC ? 32 : 0);
 }
 
-void it_lay_init(it_lay * L, const u8 * h, sz n) {
+int it_kind(const u8 * b, sz n) {
+  if (n >= IT_HDR && !memcmp(b, "IMPM", 4) && it_tab(b) <= n) return IT_FIT;
+  if (n >= S3_HDR && !memcmp(b + 0x2C, "SCRM", 4) && it_tab3(b) <= n)
+    return IT_FS3M;
+  if (n >= XM_SIG && !memcmp(b, "Extended Module: ", XM_SIG)) return IT_FXM;
+  return 0;
+}
+
+void it_lay_init(it_lay * L, const u8 * h, sz n, int f) {
   u32 i;
   memset(L, 0, sizeof *L);
-  L->n = n;  L->tab = it_tab(h);
-  L->on = rd16le(h + 0x20);  L->inn = rd16le(h + 0x22);
-  L->sn = rd16le(h + 0x24);  L->pn = rd16le(h + 0x26);
+  L->n = n;  L->f = f;
+  L->on = rd16le(h + 0x20);
+  if (f == IT_FS3M) {
+    L->tab = it_tab3(h);
+    L->sn = rd16le(h + 0x22);  L->pn = rd16le(h + 0x24);
+  } else {
+    L->tab = it_tab(h);
+    L->inn = rd16le(h + 0x22);
+    L->sn = rd16le(h + 0x24);  L->pn = rd16le(h + 0x26);
+  }
   L->ne = L->inn + 2 * L->sn + L->pn + 1;
   L->e = xcalloc(L->ne, sizeof *L->e);
   L->ord = xmalloc(L->ne * sizeof *L->ord);
@@ -51,11 +68,51 @@ void it_lay_free(it_lay * L) {
   L->e = NULL;  L->ord = NULL;
 }
 
-int it_smp_has(const u8 * s) { return (s[18] & 1) && rd32le(s + 48); }
+int it_smp_has(int f, const u8 * s) {
+  if (f == IT_FS3M) return s[0] == 1;
+  return (s[18] & 1) && rd32le(s + 48);
+}
 
-uint64_t it_smp_raw(const u8 * s) {
-  return (uint64_t) rd32le(s + 48) * ((s[18] >> 2 & 1) + 1) *
-         ((s[18] >> 1 & 1) + 1);
+int it_smp_cmp(int f, const u8 * s) {
+  return f == IT_FS3M ? s[0x1E] != 0 : s[18] >> 3 & 1;
+}
+
+u32 it_smp_fr(int f, const u8 * s) {
+  return rd32le(s + (f == IT_FS3M ? 0x10 : 48));
+}
+
+int it_smp_b16(int f, const u8 * s) {
+  return f == IT_FS3M ? s[0x1F] >> 2 & 1 : s[18] >> 1 & 1;
+}
+
+static int smp_st(int f, const u8 * s) {
+  return f == IT_FS3M ? s[0x1F] >> 1 & 1 : s[18] >> 2 & 1;
+}
+
+uint64_t it_smp_raw(int f, const u8 * s) {
+  return (uint64_t) it_smp_fr(f, s) * (smp_st(f, s) + 1) *
+         (it_smp_b16(f, s) + 1);
+}
+
+static u32 smp_ptr(int f, const u8 * s) {
+  if (f == IT_FS3M) return ((u32) s[0x0D] << 16 | rd16le(s + 0x0E)) << 4;
+  return rd32le(s + 72);
+}
+
+void it_smp_set(int f, u8 * s, u32 v) {
+  if (f == IT_FS3M) { s[0x0D] = (u8) (v >> 20);  wr16le(s + 0x0E, v >> 4); }
+  else wr32le(s + 72, v);
+}
+
+static uint64_t pat3(const u8 * b, sz n, uint64_t off) {
+  sz q = (sz) off + 2;
+  u32 r = 0;
+  while (r < 64 && q < n) {
+    u8 c = b[q++];
+    if (!c) { r++;  continue; }
+    q += (c >> 5 & 1) * 2 + (c >> 6 & 1) + (c >> 7) * 2;
+  }
+  return r < 64 || q > n || q - off > 65537 ? 0 : q - off;
 }
 
 uint64_t it_smp_comp(const u8 * b, sz n, sz at, const u8 * s) {
@@ -99,25 +156,33 @@ static u32 find(const it_lay * L, sz off) {
 }
 
 void it_parse(it_lay * L, const u8 * b) {
-  const sz n = L->n, t0 = IT_HDR + L->on;
+  const int f = L->f;
+  const sz n = L->n;
   u32 i, j, nc = 0, * c = xmalloc(L->ne * sizeof *c);
   sz pos = L->tab;
   Fi(L->inn + L->sn + L->pn,
     it_ent * e = L->e + i;
-    uint64_t off = rd32le(b + t0 + 4 * (sz) i), len;
+    uint64_t off, len;
     e->st = IS_ZERO;
-    len = e->k == IK_INS ? IT_INS : e->k == IK_SHD ? IT_SHD
-        : off + IT_PATH <= n ? IT_PATH + (uint64_t) rd16le(b + off) : 0;
+    if (f == IT_FS3M) {
+      off = (uint64_t) rd16le(b + S3_HDR + L->on + 2 * (sz) i) << 4;
+      len = e->k == IK_SHD ? S3_INS : pat3(b, n, off);
+    } else {
+      off = rd32le(b + IT_HDR + L->on + 4 * (sz) i);
+      len = e->k == IK_INS ? IT_INS : e->k == IK_SHD ? IT_SHD
+          : off + IT_PATH <= n ? IT_PATH + (uint64_t) rd16le(b + off) : 0;
+    }
     cand(L, i, off, len, 0));
   Fi(L->sn,
     const it_ent * h = L->e + it_eshd(L, i);
-    u32 k = it_esmp(L, i);
+    u32 k = it_esmp(L, i), p;
     const u8 * s = b + h->at;
-    if (h->st != IS_PRI || !it_smp_has(s)) continue;
+    int z;
+    if (h->st != IS_PRI || !it_smp_has(f, s)) continue;
     L->e[k].st = IS_ZERO;
-    cand(L, k, rd32le(s + 72), s[18] & 8 ? it_smp_comp(b, n, rd32le(s + 72), s)
-                                         : it_smp_raw(s), !(s[18] & 8)));
-  if (rd16le(b + 0x36)) {
+    p = smp_ptr(f, s);  z = it_smp_cmp(f, s) && f == IT_FIT;
+    cand(L, k, p, z ? it_smp_comp(b, n, p, s) : it_smp_raw(f, s), !z));
+  if (f == IT_FIT && rd16le(b + 0x36)) {
     L->e[L->ne - 1].st = IS_ZERO;
     cand(L, L->ne - 1, rd32le(b + 0x38), rd16le(b + 0x36), 0);
   }
@@ -142,7 +207,7 @@ void it_parse(it_lay * L, const u8 * b) {
   if (L->np) {
     const it_ent * e = L->e + L->ord[L->np - 1];
     const u8 * s = b + L->e[it_eshd(L, e->i)].at;
-    if (e->k == IK_SMP && !(s[18] & 8) && e->at + it_smp_raw(s) > n)
+    if (e->k == IK_SMP && !it_smp_cmp(f, s) && e->at + it_smp_raw(f, s) > n)
       L->clip = e->len;
   }
   xfree(c);
@@ -158,12 +223,17 @@ static u32 offv(const it_lay * L, const it_ent * e) {
 }
 
 void it_offsets(const it_lay * L, u8 * h) {
-  const sz t0 = IT_HDR + L->on;
   u32 i;
-  Fi(L->inn + L->sn + L->pn, wr32le(h + t0 + 4 * (sz) i, offv(L, L->e + i)));
+  if (L->f == IT_FS3M) {
+    Fi(L->sn + L->pn,
+      wr16le(h + S3_HDR + L->on + 2 * (sz) i, offv(L, L->e + i) >> 4));
+  } else {
+    Fi(L->inn + L->sn + L->pn,
+      wr32le(h + IT_HDR + L->on + 4 * (sz) i, offv(L, L->e + i)));
+  }
   Fi(L->sn,
     const it_ent * e = L->e + it_esmp(L, i), * s = L->e + it_eshd(L, i);
-    if (e->st != IS_NONE) wr32le(s->d + 72, offv(L, e)));
+    if (e->st != IS_NONE) it_smp_set(L->f, s->d, offv(L, e)));
   if (L->e[L->ne - 1].st != IS_NONE)
     wr32le(h + 0x38, offv(L, L->e + L->ne - 1));
 }

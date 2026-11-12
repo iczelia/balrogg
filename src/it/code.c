@@ -37,7 +37,7 @@ typedef struct {
   sz * gl;
   u32 zp[ITZ_K_N];
   sz sc[S_N], sraw[S_N], slast;
-  int scur, s16c, stc;
+  int scur, s16c, stc, f;
   struct ist * z;
 } ix;
 
@@ -129,11 +129,11 @@ static void structs(ix * x, int k, u32 lo, u32 hi) {
     it_ent * e = x->L.e + i;
     u8 * t;
     if (e->st != IS_PRI) continue;
-    t = own(x, e, k == IK_INS ? IT_INS : IT_SHD);
-    if (k == IK_SHD && !m->dec && it_smp_has(t)) wr32le(t + 72, 0);
-    rec(x, k == IK_INS ? RK_INS : RK_SHD, t, k == IK_INS ? IT_INS : IT_SHD,
-        e->i);
-    e->len = k == IK_INS ? IT_INS : IT_SHD;
+    e->len = k == IK_INS ? IT_INS : x->f == IT_FS3M ? S3_INS : IT_SHD;
+    t = own(x, e, e->len);
+    if (k == IK_SHD && !m->dec && it_smp_has(x->f, t)) it_smp_set(x->f, t, 0);
+    rec(x, k == IK_INS ? RK_INS : x->f == IT_FS3M ? RK_S3I : RK_SHD, t,
+        e->len, e->i);
   }
 }
 
@@ -193,7 +193,8 @@ static int clip(ix * x) {
   it_ent * e;
   if (!L->np) return 0;
   e = L->e + L->ord[L->np - 1];
-  if (e->k != IK_SMP || L->e[it_eshd(L, e->i)].d[18] & 8) return 0;
+  if (e->k != IK_SMP || it_smp_cmp(x->f, L->e[it_eshd(L, e->i)].d))
+    return 0;
   if (xs(x, L->clip != 0, 2, F_CLIP, 0, 0)) {
     L->clip = xn(x, (u32) L->clip, F_CLN, 0, 0);
     if (!L->clip) return -1;
@@ -359,11 +360,13 @@ static int compressed(ix * x, it_ent * e, const u8 * s) {
 
 static int raw(ix * x, it_ent * e, const u8 * s) {
   mx * m = &x->b;
-  u32 fr = rd32le(s + 48);
-  int b16 = s[18] >> 1 & 1, sg = s[46] & 1, be = b16 && (s[46] & 2),
-      bp = b16 + 1;
+  const int f = x->f;
+  u32 fr = it_smp_fr(f, s);
+  int b16 = it_smp_b16(f, s), bp = b16 + 1,
+      sg = f == IT_FS3M ? rd16le(x->h + 0x2A) == 1 : s[46] & 1,
+      be = f == IT_FIT && b16 && (s[46] & 2);
   uint64_t len = x->L.clip && e == x->L.e + x->L.ord[x->L.np - 1]
-                 ? x->L.clip : it_smp_raw(s);
+                 ? x->L.clip : it_smp_raw(f, s);
   sz nv, i;
   i16 * p;
   u8 * d, tl[2];
@@ -395,6 +398,8 @@ static int raw(ix * x, it_ent * e, const u8 * s) {
   return 0;
 }
 
+#include "it/xm.c"
+
 static int body(ix * x) {
   mx * m = &x->b;
   it_lay * L = &x->L;
@@ -411,9 +416,12 @@ static int body(ix * x) {
   Fi(L->sn,
     it_ent * e = L->e + it_esmp(L, i);
     const it_ent * h = L->e + it_eshd(L, i);
-    if (m->dec) e->st = h->st == IS_PRI && it_smp_has(h->d) ? IS_ZERO : IS_NONE;
+    if (m->dec)
+      e->st = h->st == IS_PRI && it_smp_has(x->f, h->d) ? IS_ZERO : IS_NONE;
     if (e->st != IS_NONE) est(x, it_esmp(L, i), &ps));
-  if (m->dec) L->e[L->ne - 1].st = rd16le(x->h + 0x36) ? IS_ZERO : IS_NONE;
+  if (m->dec)
+    L->e[L->ne - 1].st = x->f == IT_FIT && rd16le(x->h + 0x36) ? IS_ZERO
+                                                                : IS_NONE;
   if (L->e[L->ne - 1].st != IS_NONE) est(x, L->ne - 1, &ps);
   if (m->dec) {
     L->np = 0;
@@ -433,7 +441,9 @@ static int body(ix * x) {
     it_ent * e = L->e + it_esmp(L, i);
     const u8 * s = L->e[it_eshd(L, i)].d;
     if (e->st != IS_PRI) continue;
-    if (s[18] & 8 ? compressed(x, e, s) : raw(x, e, s)) return -1);
+    if (!it_smp_cmp(x->f, s) ? raw(x, e, s) : x->f == IT_FS3M ? opaque(x, e)
+                                            : compressed(x, e, s))
+      return -1);
   sec(x, S_HDR);
   return 0;
 }
@@ -441,19 +451,30 @@ static int body(ix * x) {
 static void header(ix * x) {
   mx * m = &x->b;
   u8 * h = x->h;
+  if (x->f == IT_FS3M) {
+    ist_tb(x);
+    rec(x, RK_S3H, h, S3_HDR, 0);
+    return;
+  }
   if (!m->dec && rd16le(h + 0x36)) wr32le(h + 0x38, 0);
   ist_tb(x);
   rec(x, RK_HDR, h, IT_HDR, 0);
+}
+
+static void tables(ix * x) {
+  if (x->f == IT_FIT) { ords(x, x->h + IT_HDR, x->L.on);  return; }
+  ords(x, x->h + S3_HDR, x->L.on);
+  if (x->h[0x35] == 0xFC) rec(x, RK_S3P, x->h + x->L.tab - 32, 32, 0);
 }
 
 int it_cfg_ok(const it_cfg * c) {
   return mod_sconfig(c->s8) && s16_config(c->s16) && st_ok(c->st);
 }
 
-static void init(ix * x, int dec, const it_cfg * c) {
+static void init(ix * x, int dec, const it_cfg * c, int f) {
   mx * m = &x->b;
   memset(x, 0, sizeof *x);
-  m->dec = dec;
+  m->dec = dec;  x->f = f;
   m->sc = mod_scfg_get(c->s8);
   x->s16c = c->s16;  x->stc = c->st;
   acm_prepare();
@@ -475,17 +496,26 @@ static void finish(ix * x) {
 sz it_code(const u8 * b, sz n, const it_cfg * c, u8 ** out) {
   ix * x = xmalloc(sizeof *x);
   sz len;
-  FATAL_UNLESS(it_kind(b, n) && it_cfg_ok(c), "internal: not an IT");
-  init(x, 0, c);
+  int f = it_kind(b, n);
+  FATAL_UNLESS(f && it_cfg_ok(c), "internal: not an IT");
+  init(x, 0, c, f);
   rc_enc_init(&x->b.e);
   x->in = b;
-  it_lay_init(&x->L, b, n);
-  it_parse(&x->L, b);
-  x->h = xmalloc(x->L.tab);
-  memcpy(x->h, b, x->L.tab);
-  header(x);
-  ords(x, x->h + IT_HDR, x->L.on);
-  FATAL_UNLESS(!body(x), "internal: IT layout");
+  if (f == IT_FXM) {
+    u8 * o = xmalloc(n + 1);
+    memcpy(o, b, n);
+    x->L.n = n;
+    FATAL_UNLESS(!xm_code(x, o), "internal: XM layout");
+    xfree(o);
+  } else {
+    it_lay_init(&x->L, b, n, f);
+    it_parse(&x->L, b);
+    x->h = xmalloc(x->L.tab);
+    memcpy(x->h, b, x->L.tab);
+    header(x);
+    tables(x);
+    FATAL_UNLESS(!body(x), "internal: IT layout");
+  }
   if (getenv("BLR_IT_STATS")) {
     int k;
     fprintf(stderr, "itstats %lu", (unsigned long) n);
@@ -535,27 +565,36 @@ static int place(ix * x, u8 * out) {
   return 0;
 }
 
-int it_decode(const u8 * a, sz alen, sz n, int s8, u8 * out) {
+int it_decode(const u8 * a, sz alen, sz n, int s8, int f, u8 * out) {
   ix * x;
   u8 hd[IT_HDR];
   it_cfg c;
   int bad = 0;
-  if (alen < 2 || n < IT_HDR) return -1;
+  if (alen < 2 || f < IT_FIT || f > IT_FXM ||
+      n < (f == IT_FIT ? IT_HDR : f == IT_FS3M ? S3_HDR : XM_SIG))
+    return -1;
   c.s8 = s8;  c.s16 = IT_S16C0 + a[0];  c.st = IT_STC0 + a[1];
   if (!it_cfg_ok(&c)) return -1;
   x = xmalloc(sizeof *x);
-  init(x, 1, &c);
+  init(x, 1, &c, f);
   rc_dec_init(&x->b.r, a + 2, alen - 2);
+  if (f == IT_FXM) {
+    x->L.n = n;
+    bad = xm_code(x, out) || rc_dec_spent(&x->b.r);
+    finish(x);
+    xfree(x);
+    return bad ? -1 : 0;
+  }
   memset(hd, 0, sizeof hd);
   x->h = hd;
   header(x);
   x->h = NULL;
-  if (it_tab(hd) > n) bad = 1;
+  if ((f == IT_FIT ? it_tab(hd) : it_tab3(hd)) > n) bad = 1;
   else {
-    it_lay_init(&x->L, hd, n);
+    it_lay_init(&x->L, hd, n, f);
     x->h = xcalloc(x->L.tab, 1);
-    memcpy(x->h, hd, IT_HDR);
-    ords(x, x->h + IT_HDR, x->L.on);
+    memcpy(x->h, hd, f == IT_FIT ? IT_HDR : S3_HDR);
+    tables(x);
     if (body(x) || place(x, out) || rc_dec_spent(&x->b.r)) bad = 1;
   }
   finish(x);

@@ -22,7 +22,7 @@ typedef struct {
   pkc * g;
   sz gcap, base, mp[64], rp, pb, * qb;
   u32 * mt, * rt, ml[64], rml, prow, S, prv, pnc, pr[64], * qr, qn, qcap, pd;
-  u32 uh, ut;
+  u32 uh, ut, pfm;
   int rok;
   u8 ln[64], ln2[64], li[64], lv[64], lc[64], lh[64], hh[64];
   u8 lpc[64][32], lpc2[64][32], nti[256], iv[256], ic[256], ip[256];
@@ -380,7 +380,7 @@ static void pcells(ix * x, pst * p, pent * E, u32 * rs, u32 rows, u32 nc) {
         Fj(5, y->f[j] = (u8) KF(v, j));
       }
       y->ch = (u8) c;
-      ppack(x, &ks, y);
+      if (x->f == IT_FIT) ppack(x, &ks, y);
       ne++;  np++;
     }
   }
@@ -521,6 +521,120 @@ static int ptn(ix * x, pst * p, it_ent * e) {
   return 0;
 }
 
+static INLINE u8 n3f(u32 v) {
+  u32 o = v >> 4, s = v & 15;
+  return (u8) (o >= 10 ? v : s < 12 ? o * 12 + s : 120 + 4 * o + s - 12);
+}
+
+static INLINE u8 n3b(u32 u) {
+  return (u8) (u < 120 ? (u / 12) << 4 | u % 12
+               : u < 160 ? (u - 120) / 4 * 16 + 12 + (u & 3) : u);
+}
+
+static int unp3(const u8 * p, sz len, pent * E, u32 * rs) {
+  sz q = 0;
+  u32 ne = 0, r;
+  for (r = 0; r < 64; r++) {
+    int pc = -1;
+    rs[r] = ne;
+    for (;;) {
+      u8 b;
+      int c;
+      pent * y;
+      if (q >= len) return -1;
+      b = p[q++];
+      if (!b) break;
+      c = b & 31;
+      if (c <= pc) return -1;
+      pc = c;
+      if (q + (b >> 5 & 1) * 2 + (b >> 6 & 1) + (b >> 7) * 2 > len)
+        return -1;
+      y = E + ne++;
+      memset(y, 0, sizeof *y);
+      y->ch = (u8) c;
+      y->has = (u8) ((b & 0x20 ? 3 : 0) | (b >> 4 & 12));
+      if (b & 0x20) { y->f[0] = n3f(p[q]);  y->f[1] = p[q + 1];  q += 2; }
+      if (b & 0x40) y->f[2] = p[q++];
+      if (b & 0x80) { y->f[3] = p[q];  y->f[4] = p[q + 1];  q += 2; }
+    }
+  }
+  rs[64] = ne;
+  return q == len ? (int) ne : -1;
+}
+
+static sz rep3(const pent * E, const u32 * rs, u8 * o) {
+  sz q = 0;
+  u32 r, k;
+  for (r = 0; r < 64; r++) {
+    for (k = rs[r]; k < rs[r + 1]; k++) {
+      const pent * y = E + k;
+      o[q++] = (u8) (y->ch | (y->has & 1) << 5 | (y->has & 12) << 4);
+      if (y->has & 1) { o[q++] = n3b(y->f[0]);  o[q++] = y->f[1]; }
+      if (y->has & 4) o[q++] = y->f[2];
+      if (y->has & 8) { o[q++] = y->f[3];  o[q++] = y->f[4]; }
+    }
+    o[q++] = 0;
+  }
+  return q;
+}
+
+#define P3MAX (64 * (64 * 6 + 1) + 1)
+
+static int can3(const u8 * src, sz len, pent * E, u32 * rs) {
+  u8 * o = xmalloc(P3MAX);
+  int ne = len < P3MAX ? unp3(src, len, E, rs) : -1;
+  if (ne >= 0 && (rep3(E, rs, o) != len || memcmp(o, src, len))) ne = -1;
+  xfree(o);
+  return ne;
+}
+
+static int ptn3(ix * x, pst * p, it_ent * e) {
+  mx * m = &x->b;
+  zc * z = &x->z->z;
+  const u8 * src = x->in ? x->in + e->at : NULL;
+  u32 len = 0, fld = 0, fm = 0, mode = 1, nc = 0, i, rs[65];
+  pent * E = NULL;
+  int ne;
+  if (src) {
+    len = (u32) e->len - 2;  fld = rd16le(src);
+    fm = fld == len + 2 ? 0 : fld == len ? 1 : 2;
+    E = xmalloc((len + 1) * sizeof *E);
+    ne = can3(src + 2, len, E, rs);
+    if (ne >= 0) {
+      mode = 0;
+      Fi((u32) ne, nc = MAX(nc, E[i].ch + 1u));
+      if (nc > p->S) mode = 1;
+    }
+  }
+  z->n = 1;
+  z->h[0] = ZH2(0x6AD, p->pfm);
+  fm = MIN(zsym(m, z, fm, 2, ZH2(0x6AE, 0), ZH2(0x6AF, 0)), 2);
+  p->pfm = fm;
+  if (fm == 2) fld = znum(x, fld, 0, 16, 0x6B8);
+  z->n = 1;
+  z->h[0] = ZH2(0x6A5, 0);
+  if (zflag(m, z, (int) mode, ZH2(0x6A6, 0), ZH2(0x6A7, 0))) {
+    len = znum(x, len, 0, 16, 0x6A8);
+    if (len > x->L.n) { xfree(E);  return -1; }
+    own(x, e, 2 + (sz) len);
+    zbytes(x, e->d + 2, len, 0x6B0);
+  } else {
+    if (m->dec) E = xmalloc((64 * 64 + 1) * sizeof *E);
+    nc = znum(x, nc, p->pnc, 7, 0x6A9);
+    if (nc > p->S) { xfree(E);  return -1; }
+    p->pnc = nc;
+    psrc(x, p, E, rs, 64);
+    pcells(x, p, E, rs, 64, nc);
+    e->d = xmalloc(2 + P3MAX);
+    len = (u32) rep3(E, rs, e->d + 2);
+  }
+  xfree(E);
+  if (fm < 2) fld = fm ? len : len + 2;
+  wr16le(e->d, fld);
+  e->len = 2 + (sz) len;
+  return 0;
+}
+
 static u32 pscan(ix * x) {
   it_lay * L = &x->L;
   u32 i, S = 0;
@@ -533,6 +647,14 @@ static u32 pscan(ix * x) {
     u8 * o;
     int ne;
     if (e->st != IS_PRI) continue;
+    if (x->f == IT_FS3M) {
+      u32 r3[65];
+      E = xmalloc(e->len * sizeof *E);
+      ne = can3(src + 2, e->len - 2, E, r3);
+      Fj((u32) MAX(ne, 0), S = MAX(S, E[j].ch + 1u));
+      xfree(E);
+      continue;
+    }
     rows = rd16le(src + 2);  len = rd16le(src);
     if (rows > IT_MAXROW) continue;
     E = xmalloc((len + 1) * sizeof *E);
@@ -560,7 +682,8 @@ static int pats(ix * x) {
   p->pnc = p->S;
   for (i = 0; i < L->pn && !bad; i++) {
     it_ent * e = L->e + it_epat(L, i);
-    if (e->st == IS_PRI && ptn(x, p, e)) bad = 1;
+    if (e->st == IS_PRI && (x->f == IT_FS3M ? ptn3(x, p, e) : ptn(x, p, e)))
+      bad = 1;
   }
   pst_free(p);
   return bad ? -1 : 0;

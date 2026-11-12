@@ -35,18 +35,27 @@ int it_sniff(const char * path) {
   u8 b[IT_HDR];
   uint64_t size;
   int n = peek(path, b, sizeof b, &size);
-  return n == IT_HDR && !memcmp(b, "IMPM", 4) && it_tab(b) <= size;
+  if (n == IT_HDR && !memcmp(b, "IMPM", 4) && it_tab(b) <= size)
+    return IT_FIT;
+  if (n >= S3_HDR && !memcmp(b + 0x2C, "SCRM", 4) && it_tab3(b) <= size)
+    return IT_FS3M;
+  if (n >= XM_SIG && it_kind(b, (sz) n) == IT_FXM) return IT_FXM;
+  return 0;
 }
 
 int it_is_archive(const char * path) {
   u8 b[ARC_HDRLEN];
   int n = peek(path, b, sizeof b, NULL);
-  return n > 0 && arc_is_it(b, (sz) n);
+  if (n <= 0) return 0;
+  return arc_is_it(b, (sz) n) ? IT_FIT : arc_is_s3m(b, (sz) n) ? IT_FS3M
+       : arc_is_xm(b, (sz) n) ? IT_FXM : 0;
 }
 
-static void put_head(u8 * h, int eng, int scfg, uint64_t n) {
+static void put_head(u8 * h, int eng, int scfg, uint64_t n, int f) {
   memcpy(h, ARC_MAGIC, ARC_MAGLEN);
-  h[ARC_MAGLEN] = ARC_VERSION;  h[ARC_MAGLEN + 1] = ARC_KIT;
+  h[ARC_MAGLEN] = ARC_VERSION;
+  h[ARC_MAGLEN + 1] = f == IT_FS3M ? ARC_KS3M : f == IT_FXM ? ARC_KXM
+                                                             : ARC_KIT;
   h[ARC_MAGLEN + 2] = (u8) eng;  h[ARC_MAGLEN + 3] = (u8) (scfg - MOD_SCFG0);
   wr64le(h + ARC_MAGLEN + 4, n);  wr32le(h + ARC_MODHDR, arc_sum_get());
 }
@@ -68,24 +77,40 @@ static const u8 LEVELS[BLR_NLEV][3] = {
   { 40, 17, 2 }, { 41, 17, 2 }, { 41, 18, 2 }, { 41, 18, 2 }, { 41, 18, 2 }
 };
 
-void it_level(int level, it_cfg * c) {
+static const u8 LEVELS3[BLR_NLEV][3] = {
+  { 2, 1, 1 }, { 4, 1, 1 }, { 6, 1, 1 }, { 7, 2, 1 }, { 9, 2, 1 },
+  { 10, 10, 1 }, { 11, 10, 4 }, { 12, 10, 4 }, { 42, 11, 4 }, { 31, 11, 4 },
+  { 33, 12, 5 }, { 34, 15, 5 }, { 36, 15, 5 }, { 37, 16, 5 }, { 38, 16, 5 },
+  { 40, 17, 2 }, { 41, 17, 2 }, { 41, 18, 2 }, { 41, 18, 2 }, { 41, 18, 2 }
+};
+
+static const u8 LEVELSX[BLR_NLEV][3] = {
+  { 2, 1, 1 }, { 4, 1, 1 }, { 6, 1, 1 }, { 7, 2, 1 }, { 9, 2, 1 },
+  { 9, 10, 1 }, { 12, 10, 4 }, { 42, 10, 4 }, { 42, 11, 4 }, { 31, 11, 4 },
+  { 33, 12, 5 }, { 36, 11, 4 }, { 36, 12, 5 }, { 36, 15, 5 }, { 38, 15, 5 },
+  { 38, 16, 5 }, { 40, 16, 5 }, { 40, 17, 2 }, { 41, 17, 2 }, { 41, 18, 2 }
+};
+
+void it_level(int level, int fmt, it_cfg * c) {
   const char * d = getenv("BLR_MOD_SCFG"), * e = getenv("BLR_IT_S16"),
              * f = getenv("BLR_IT_ST");
-  const u8 * l = LEVELS[CLAMP(level, 1, BLR_NLEV) - 1];
+  const int k = CLAMP(level, 1, BLR_NLEV) - 1;
+  const u8 * l = fmt == IT_FIT ? LEVELS[k] : fmt == IT_FS3M ? LEVELS3[k]
+                                                           : LEVELSX[k];
   c->s8 = d ? atoi(d) : MOD_SCFG0 + l[0];
   c->s16 = e ? atoi(e) : IT_S16C0 + l[1];
   c->st = f ? atoi(f) : IT_STC0 + l[2];
 }
 
-int it_pack(const char * in, const char * out, const it_cfg * g) {
+int it_pack(const char * in, const char * out, const it_cfg * g, int f) {
   sz n, cl = 0;
   u8 * b = slurp(in, &n), * c = NULL, h[ITA_HDR];
-  int ok = n <= IT_MAXN && it_kind(b, n) && it_cfg_ok(g);
+  int ok = n <= IT_MAXN && it_kind(b, n) == f && it_cfg_ok(g);
   if (ok) {
     cl = it_code(b, n, g, &c);
     ok = cl < n;
   }
-  put_head(h, ok ? ITE_CM : ITE_STORE, g->s8, n);
+  put_head(h, ok ? ITE_CM : ITE_STORE, g->s8, n, f);
   emit(out, h, ok ? c : b, ok ? cl : n);
   xfree(b);  xfree(c);
   return BLR_EXIT_OK;
@@ -95,8 +120,10 @@ int it_unpack(const char * in, const char * out) {
   sz al;
   u8 * a = slurp(in, &al), * o;
   uint64_t n;
-  int eng, scfg;
-  if (al < ITA_HDR || !arc_is_it(a, al)) {
+  int eng, scfg, f = al < ITA_HDR ? 0 : arc_is_it(a, al) ? IT_FIT
+                    : arc_is_s3m(a, al) ? IT_FS3M
+                    : arc_is_xm(a, al) ? IT_FXM : 0;
+  if (!f) {
     xfree(a);  FATAL("%s: not an IT archive", in);
   }
   eng = a[ARC_MAGLEN + 2];  scfg = MOD_SCFG0 + a[ARC_MAGLEN + 3];
@@ -111,7 +138,7 @@ int it_unpack(const char * in, const char * out) {
                "%s: unknown IT engine %d/%d", in, eng, scfg);
   FATAL_UNLESS(n <= IT_MAXN, "%s: corrupt IT archive", in);
   o = xcalloc((sz) n + 1, 1);
-  if (it_decode(a + ITA_HDR, al - ITA_HDR, (sz) n, scfg, o)) {
+  if (it_decode(a + ITA_HDR, al - ITA_HDR, (sz) n, scfg, f, o)) {
     xfree(o);  xfree(a);
     FATAL("%s: corrupt IT archive", in);
   }

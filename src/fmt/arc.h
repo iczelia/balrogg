@@ -29,6 +29,8 @@
 #define ARC_KOPUS     0x04
 #define ARC_KMOD      0x08
 #define ARC_KIT       0x10
+#define ARC_KS3M      0x20
+#define ARC_KXM       0x40
 #define ARC_OGGHDR    (ARC_HDRLEN + ARC_LENLEN + ARC_SUMLEN)
 #define ARC_MP3HDR    (ARC_MAGLEN + 4 + 8)
 #define ARC_MODHDR    ARC_MP3HDR
@@ -63,6 +65,8 @@ int arc_is(const u8 * h, sz n);
 int arc_is_mp3(const u8 * h, sz n);
 int arc_is_mod(const u8 * h, sz n);
 int arc_is_it(const u8 * h, sz n);
+int arc_is_s3m(const u8 * h, sz n);
+int arc_is_xm(const u8 * h, sz n);
 
 void arc_init(archive * a, int opus, int cfg);
 void arc_begin(archive * a, blr_file * output);

@@ -61,7 +61,7 @@ static void usage(FILE * to) {
   banner(to);
   fprintf(to,
     "\n"
-    "usage: balrogg [-1..-%d] e IN OUT      compress Ogg/MP3/MOD/IT to OUT\n"
+    "usage: balrogg [-1..-%d] e IN OUT      compress Ogg/MP3/MOD/IT/S3M/XM\n"
     "       balrogg d IN OUT                expand archive to OUT\n"
     "       balrogg [-1..-%d] -b e|d FILE... process files in parallel\n"
     "       balrogg -h | -v\n"
@@ -105,7 +105,7 @@ static int peek(const char * path, u8 * b, int max) {
 
 enum {
   F_READ = -2, F_BAD = -1, F_UNKNOWN = 0, F_VORBIS = 1, F_OPUS = 2, F_MP3 = 3,
-  F_MOD = 4, F_IT = 5
+  F_MOD = 4, F_IT = 5, F_S3M = 6, F_XM = 7
 };
 
 #define BLR_MP3_PEEK (1 << 20)
@@ -122,8 +122,11 @@ static int sniff(const char * path) {
   u8 b[512];
   int n = peek(path, b, (int) sizeof b), at;
   if (n < 0) return n;
-  if (n < 28 || memcmp(b, "OggS", 4))
-    return it_sniff(path) ? F_IT : mod_sniff(path) ? F_MOD : sniff_mp3(path);
+  if (n < 28 || memcmp(b, "OggS", 4)) {
+    int k = it_sniff(path);
+    if (k) return k == IT_FS3M ? F_S3M : k == IT_FXM ? F_XM : F_IT;
+    return mod_sniff(path) ? F_MOD : sniff_mp3(path);
+  }
   at = 27 + b[26];
   if (at + 8 > n) return F_UNKNOWN;
   if (!memcmp(b + at, "\001vorbis", 7)) return F_VORBIS;
@@ -277,11 +280,15 @@ static int code_one(int enc, const char * in, const char * out,
   case F_MOD:
     return mod_pack(in, out, mod_level_cfg(level), mod_level_scfg(level));
   case F_IT:
+  case F_S3M:
+  case F_XM:
     { it_cfg c;
-      it_level(level, &c);
-      return it_pack(in, out, &c); }
+      int f = kind == F_S3M ? IT_FS3M : kind == F_XM ? IT_FXM : IT_FIT;
+      it_level(level, f, &c);
+      return it_pack(in, out, &c, f); }
   case F_UNKNOWN:
-    fprintf(stderr, "balrogg: %s is not Ogg Vorbis, Ogg Opus, MP3, MOD or IT\n", in);
+    fprintf(stderr, "balrogg: %s is not Ogg Vorbis, Ogg Opus, MP3, MOD, IT, "
+            "S3M or XM\n", in);
     return BLR_EXIT_REFUSED;
   case F_BAD:
     fprintf(stderr, "balrogg: cannot open %s\n", in);
@@ -368,6 +375,8 @@ static char * out_name(int enc, const char * in) {
   strcpy(s + stem, enc ? ".blr" : arc_is_opus(in) ? ".opu"
                   : mp3_is_archive(in) ? ".mp3"
                   : mod_is_archive(in) ? ".mod"
+                  : it_is_archive(in) == IT_FS3M ? ".s3m"
+                  : it_is_archive(in) == IT_FXM ? ".xm"
                   : it_is_archive(in) ? ".it" : ".ogg");
   return s;
 }

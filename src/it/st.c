@@ -178,8 +178,41 @@ static const u8 TPS[80] = {
   0, 0, 0, 0, 0, 0, 0, 0
 };
 
+static const u8 TP3H[96] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 26, 16, 0, 0, 32, 0, 31, 0, 99, 0, 0, 0, 32, 19, 2, 0, 83, 67, 82, 77,
+  64, 6, 125, 176, 16, 252, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 1, 9, 2, 10, 3,
+  11, 4, 12, 5, 13, 6, 14, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255,
+  255, 255, 255, 255, 255, 255, 255, 255
+};
+static const u8 TP3I[80] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 64, 0, 0, 0, 171, 32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  83, 67, 82, 83
+};
+static const u8 TP3P[32] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0
+};
 
-enum { RK_HDR, RK_INS, RK_SHD, RK_N };
+static const u8 TPXH[XM_HDR] = {
+  69, 120, 116, 101, 110, 100, 101, 100, 32, 77, 111, 100, 117, 108, 101, 58,
+  32, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 26, 70, 97,
+  115, 116, 84, 114, 97, 99, 107, 101, 114, 32, 118, 50, 46, 48, 48, 32, 32,
+  32, 4, 1, 20, 1, 0, 0, 0, 0, 0, 0, 8, 0, 0, 0, 0, 0, 1, 0, 6, 0, 125, 0
+};
+static const u8 TPXI[XM_INS] = {
+  7, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 1, 0, 40
+};
+static const u8 TPXS[XM_SHD] = {
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 64, 0, 0, 128
+};
+
+enum {
+  RK_HDR, RK_INS, RK_SHD, RK_S3H, RK_S3I, RK_S3P, RK_XH, RK_XI, RK_XS, RK_N
+};
 
 typedef struct { u8 tbo, cap, pcap, two; } stct;
 
@@ -196,7 +229,12 @@ typedef struct ist {
   u8 rp[RK_N][IT_INS], rq[RK_N][IT_INS];
 } ist;
 
-static const u8 * const TPL[RK_N] = { TPH, TPI, TPS };
+static const u8 * const TPL[RK_N] = {
+  TPH, TPI, TPS, TP3H, TP3I, TP3P, TPXH, TPXI, TPXS
+};
+static const u16 TPN[RK_N] = {
+  IT_HDR, IT_INS, IT_SHD, S3_HDR, S3_INS, 32, XM_HDR, XM_INS, XM_SHD
+};
 
 static INLINE u32 tx1(u32 a) { return ZH2(0x501, a); }
 static INLINE u32 tx2(u32 a, u32 b) { return ZH3(0x502, a, b); }
@@ -207,26 +245,30 @@ static ist * ist_new(int cfg) {
   int k;
   memset(s, 0, sizeof *s);
   s->cf = STC + (cfg - IT_STC0 - 1);
-  Fk(RK_N, memcpy(s->rp[k], TPL[k], k == RK_HDR ? IT_HDR : k == RK_INS
-                                     ? IT_INS : IT_SHD);
+  Fk(RK_N, memcpy(s->rp[k], TPL[k], TPN[k]);
            memcpy(s->rq[k], s->rp[k], IT_INS));
   return s;
 }
 
-static void ist_tb(ix * x) {
+static void ist_tbn(ix * x, sz n) {
   mx * m = &x->b;
   u32 tb = 0, v = 0, i;
-  if (!m->dec) {
-    const it_lay * L = &x->L;
-    sz n = L->n;
-    Fi(L->ne, if (L->e[i].k == IK_SMP && L->e[i].st == IS_PRI)
-                n -= MIN(n, L->e[i].len));
+  if (!m->dec)
     tb = (u32) CLAMP((int) blr_ilog((u32) MIN(n, 1u << 30)) +
                      x->z->cf->tbo, 16, 22) - 16;
-  }
   Fi(3, v = v << 1 | (u32) mx_bit(m, (int) (tb >> (2 - i) & 1), 32768));
   zc_init(&x->z->z, 16 + (int) MIN(v, 6), x->z->cf->cap, x->z->cf->pcap,
           x->z->cf->two);
+}
+
+static void ist_tb(ix * x) {
+  const it_lay * L = &x->L;
+  sz n = L->n;
+  u32 i;
+  if (!x->b.dec)
+    Fi(L->ne, if (L->e[i].k == IK_SMP && L->e[i].st == IS_PRI)
+                n -= MIN(n, L->e[i].len));
+  ist_tbn(x, n);
 }
 
 static void ist_free(ist * s) {
@@ -237,12 +279,65 @@ static void ist_free(ist * s) {
 
 static int rskip(int k, const u8 * t, sz j) {
   if (k == RK_HDR) return j >= 0x38 && j < 0x3C && rd16le(t + 0x36);
-  if (k == RK_SHD) return j >= 72 && j < 76 && it_smp_has(t);
-  return 0;
+  if (k == RK_SHD) return j >= 72 && j < 76 && it_smp_has(IT_FIT, t);
+  if (k == RK_S3I) return j >= 13 && j < 16 && it_smp_has(IT_FS3M, t);
+  return k == RK_XI && j < 4;
+}
+
+static int fcls3(int k, sz j, sz * fs, sz * alt) {
+  if (k == RK_S3P) {
+    if (j) *alt = j - 1;
+    return 1;
+  }
+  if (k == RK_S3H) {
+    if (j < 28) { *fs = 0;  return 2; }
+    if (j < 44) return 3 + (int) (j - 28);
+    if (j < 48) return 19;
+    if (j < 64) return 20 + (int) (j - 48);
+    if (j != 64) *alt = j - 1;
+    return 36;
+  }
+  if (!j) return 1;
+  if (j < 13) { *fs = 1;  return 2; }
+  if (j >= 24 && j < 28) *alt = j - 8;
+  if (j < 48) return 3 + (int) (j - 13);
+  if (j < 76) { *fs = 48;  return 38; }
+  return 39;
+}
+
+static int fclsx(int k, sz j, sz * fs, sz * alt) {
+  if (k == RK_XH) {
+    if (j < 17) return 1;
+    if (j < 37) { *fs = 17;  return 2; }
+    if (j < 38) return 3;
+    if (j < 58) { *fs = 38;  return 4; }
+    return 5 + (int) (j - 58);
+  }
+  if (k == RK_XS) {
+    if (j < 18) return 1 + (int) j;
+    *fs = 18;
+    return 19;
+  }
+  if (j < 26) { *fs = 4;  return 2; }
+  if (j < 33) return 3 + (int) (j - 26);
+  if (j < 129) {
+    if (j > 33) *alt = j - 1;
+    return 10;
+  }
+  if (j < 225) {
+    sz o = (j - 129) % 48;
+    if (o >= 4) *alt = j - 4;
+    return 11 + (int) ((j - 129) / 48 * 4 + o % 4);
+  }
+  if (j < 241) return 19 + (int) (j - 225);
+  if (j > 241) *alt = j - 1;
+  return 35;
 }
 
 static int fcls(int k, const u8 * t, sz j, sz * fs, sz * alt) {
   *fs = NOC;  *alt = NOC;
+  if (k >= RK_XH) return fclsx(k, j, fs, alt);
+  if (k >= RK_S3H) return fcls3(k, j, fs, alt);
   if (j < 4) return 1;
   if (k == RK_HDR) {
     if (j < 30) { *fs = 4;  return 2; }
@@ -516,7 +611,7 @@ static void gpcm(ix * x, u8 * t, sz n, int b16, u32 id) {
 static void zgap(ix * x, u8 * t, sz n, u32 gi, u32 pk, u32 nk) {
   zc * z = &x->z->z;
   mx * m = &x->b;
-  const u8 * h = x->h;
+  const u8 * h = x->f == IT_FIT ? x->h : NULL;
   u8 * tp = NULL;
   sz j, ms = NOC, hs = NOC, he = 0, st = 0;
   int md = 0;
@@ -538,7 +633,7 @@ static void zgap(ix * x, u8 * t, sz n, u32 gi, u32 pk, u32 nk) {
     u32 p1 = j ? t[j - 1] : 256, p2 = j > 1 ? t[j - 2] : 256,
         p3 = j > 2 ? t[j - 3] : 256, p4 = j > 3 ? t[j - 4] : 256,
         p8 = j > 7 ? t[j - 8] : 256, r = 256, v = m->dec ? 0 : t[j], ph;
-    if (!gi && j == 2 && rd16le(h + 0x2E) & 2) {
+    if (!gi && j == 2 && h && rd16le(h + 0x2E) & 2) {
       hs = 2;  he = 2 + 8 * (sz) rd16le(t);
     }
     if (tp && ms == NOC && j == (hs != NOC ? he : 0)) ms = j;
