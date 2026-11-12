@@ -1,21 +1,18 @@
 /aclocal.m4
+/build-aux/*
+!/build-aux/version.sh
+/.tarball-version
+/.tarball-date
+/balrogg.1
 /autom4te.cache/
-/ar-lib
-/compile
-/config.guess
 /config.h
 /config.h.in
 /config.h.in~
 /config.log
 /config.status
-/config.sub
 /configure
 /configure~
-/depcomp
-/install-sh
-/missing
 /stamp-h1
-/test-driver
 /Makefile
 /Makefile.in
 .deps/
@@ -37,7 +34,7 @@ t_suite-*
 
 /balrogg-*.tar.*
 /balrogg-*.zip
-/ChangeLog.tmp
+/ChangeLog
 *~
 *.orig
 *.rej

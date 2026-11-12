@@ -10,12 +10,13 @@ permissions:
   contents: read
 
 jobs:
-  #  Build every target from the same source package.
   dist:
     name: Package
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
 
       - name: Bootstrap and configure
         run: ./bootstrap && ./configure
@@ -32,7 +33,6 @@ jobs:
       - name: Run distcheck
         run: make distcheck
 
-  #  Linux compiler and sanitizer matrix.
   linux:
     name: Linux ${{ matrix.cc }} ${{ matrix.san }}
     needs: [ dist ]
@@ -75,7 +75,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Exercise allocation overflow guards on a 32-bit host.
   linux-i386:
     name: Linux i386 (32-bit)
     needs: [ dist ]
@@ -121,7 +120,55 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Run the suite once per mixer kernel, and once built without SIMD.
+  linux-musl:
+    name: Linux musl static ${{ matrix.runner }}
+    needs: [ dist ]
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ ubuntu-24.04, ubuntu-24.04-arm ]
+    steps:
+      - name: Download source package artifact
+        uses: actions/download-artifact@v7
+        with:
+          name: balrogg-${{ github.sha }}
+
+      - name: Install the musl toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: Extract source package
+        run: |
+          tar --strip-components=1 -mxf balrogg-${{ github.sha }}.tar.gz
+          sleep 1
+          touch aclocal.m4 configure config.h.in Makefile.in
+
+      - name: Configure
+        run: ./configure CC=musl-gcc CFLAGS="-O2 -g" LDFLAGS=-static
+
+      - name: Make
+        run: make -j4 all
+
+      - name: Confirm a static musl binary
+        run: |
+          file balrogg
+          ./balrogg --version
+          if readelf -l balrogg | grep -q 'Requesting program interpreter'; then
+            echo "the binary has an ELF interpreter"; exit 1
+          fi
+          if grep -aq GLIBC_TUNABLES balrogg; then
+            echo "the binary links glibc, not musl"; exit 1
+          fi
+
+      - name: Suite once per kernel
+        run: VERBOSE=1 make check-simd
+
+      - name: Show the test logs
+        if: failure()
+        run: cat test-suite.log tests/*.log 2>&1 || true
+
   linux-simd-sweep:
     name: Linux mixer kernels ${{ matrix.simd }}
     needs: [ dist ]
@@ -166,7 +213,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  aarch64 on native hardware.
   linux-aarch64:
     name: Linux aarch64 ${{ matrix.cc }} ${{ matrix.san }}
     needs: [ dist ]
@@ -210,7 +256,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  macOS on both architectures.
   macos:
     name: macOS ${{ matrix.os }} ${{ matrix.san }}
     needs: [ dist ]
@@ -254,7 +299,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Native 32- and 64-bit Windows through MSYS2.
   windows:
     name: Windows ${{ matrix.msystem }}
     needs: [ dist ]
@@ -295,7 +339,7 @@ jobs:
 
       - name: Configure
         run: |
-          ./configure --build="`sh ./config.guess`" \
+          ./configure --build="`sh ./build-aux/config.guess`" \
                       --host=${{ matrix.host }} \
                       CC=${{ matrix.host }}-gcc LDFLAGS=-static
 
@@ -318,7 +362,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Cross-build Windows binaries; the next job runs them.
   windows-cross:
     name: Windows cross ${{ matrix.target.name }}
     needs: [ dist ]
@@ -392,7 +435,6 @@ jobs:
             balrogg.dbg
             config.h
 
-  #  Run the cross-built binaries on Windows.
   windows-cross-test:
     name: Windows run ${{ matrix.name }}
     needs: [ dist, windows-cross ]
@@ -443,12 +485,9 @@ jobs:
           sleep 1
           touch aclocal.m4 configure config.h.in Makefile.in
 
-      #  The suite links the code under test itself and is built with the
-      #  normal runtime even for Win95; the binary under every command-line
-      #  test is the artifact.
       - name: Build the test harness and run it against the artifact
         run: |
-          ./configure --build="`sh ./config.guess`" \
+          ./configure --build="`sh ./build-aux/config.guess`" \
                       --host=${{ matrix.host }} \
                       CC=${{ matrix.host }}-gcc LDFLAGS=-static
           make -j4 test-programs
@@ -467,7 +506,6 @@ jobs:
         if: failure()
         run: cat test-suite.log tests/*.log 2>&1 || true
 
-  #  Build for MS-DOS with DJGPP and run the C suite in a FreeDOS guest.
   dos:
     name: MS-DOS i386 (DJGPP, FreeDOS)
     needs: [ dist ]
@@ -532,7 +570,6 @@ jobs:
               && make -j4 all \
               && make -j4 test-programs )
 
-      #  Use objdump's stable BFD target name for the assertion.
       - name: Verify the DOS binary format
         run: |
           file build-dos/balrogg.exe
@@ -557,7 +594,6 @@ jobs:
             ${{ runner.temp }}/dos-suite/*.log
           if-no-files-found: ignore
 
-  #  Foreign architectures under qemu-user, including big-endian s390x.
   cross:
     name: Cross ${{ matrix.target.arch }}
     needs: [ dist ]
@@ -613,7 +649,6 @@ jobs:
       - name: Make
         run: make -j4 all
 
-      #  Invoke qemu directly; do not depend on binfmt_misc.
       - name: Write the qemu launcher
         run: |
           file balrogg
@@ -622,7 +657,6 @@ jobs:
           chmod +x qw/balrogg
           ./qw/balrogg --version
 
-      #  The suite runs under qemu and reaches the binary through qw/balrogg.
       - name: Test suite under qemu
         run: |
           make -j4 check VERBOSE=1 LOG_COMPILER="$QEMU" \

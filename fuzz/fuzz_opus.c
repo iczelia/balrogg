@@ -1,27 +1,17 @@
-/*  Fuzz both Ogg Opus directions, selected by the first input byte.  */
-
 #define FZ_TAG "opus"
 #include "harness.h"
-#include "opusmode.h"
+#include "fzcfg.h"
 
-int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size);
+static int cfg;
+
+static int enc(void) { FZ_JOB(FZ_OUT, opus_pack(FZ_IN, FZ_OUT, cfg)); }
+static int dec(void) { FZ_JOB(FZ_OUT2, opus_unpack(FZ_OUT, FZ_OUT2)); }
 
 int LLVMFuzzerTestOneInput(const uint8_t * data, size_t size) {
-  volatile int rc = -1;                 /*  survives the longjmp  */
-  int enc;
-  if (size < 33 || size > (1u << 19)) return 0;
-  enc = data[0] & 1;
-  data++;  size--;
+  if (size < 34 || size > (1u << 20)) return 0;
   fz_paths();
-  if (!enc) {
-    fz_put(FZ_IN, data, size);
-    FZ_TRY(opus_unpack(FZ_IN, FZ_OUT));
-    return 0;
-  }
-  fz_put_ogg(data, size);
-  if (!FZ_TRY(rc = opus_pack(FZ_IN, FZ_OUT, 6)) || rc) return 0;
-  if (!FZ_TRY(rc = opus_unpack(FZ_OUT, FZ_OUT2)) || rc)
-    { fprintf(stderr, "opus encode produced an archive we reject\n");  abort(); }
-  fz_same(FZ_IN, FZ_OUT2);
+  cfg = fz_opus_cfg(data[0]);
+  fz_put_ogg(data + 2, size - 2, data[1] & 1);
+  fz_pack_trip(enc, dec);
   return 0;
 }

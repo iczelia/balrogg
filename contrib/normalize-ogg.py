@@ -4,7 +4,6 @@
 import pathlib
 import sys
 
-
 def crc(page: bytearray) -> int:
     value = 0
     for byte in page:
@@ -12,7 +11,6 @@ def crc(page: bytearray) -> int:
         for _ in range(8):
             value = ((value << 1) ^ (0x04C11DB7 if value & 0x80000000 else 0)) & 0xFFFFFFFF
     return value
-
 
 def normalize(path: pathlib.Path) -> None:
     data = bytearray(path.read_bytes())
@@ -35,7 +33,6 @@ def normalize(path: pathlib.Path) -> None:
         data[pos + 22 : pos + 26] = crc(data[pos:end]).to_bytes(4, "little")
         pos = end
     path.write_bytes(data)
-
 
 for name in sys.argv[1:]:
     normalize(pathlib.Path(name))

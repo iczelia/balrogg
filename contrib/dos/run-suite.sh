@@ -2,11 +2,6 @@
 #  Run the C suite in a FreeDOS guest under QEMU.
 #
 #    contrib/dos/run-suite.sh DOS-BUILD FREEDOS-ROOT [WORKDIR]
-#
-#  DOS-BUILD holds a --host=i586-pc-msdosdjgpp build with balrogg.exe and
-#  tests/t_suite.exe.  FREEDOS-ROOT is what install-freedos.sh produced.
-#  Fixtures are copied under the 8.3 names the harness derives on DOS.
-
 set -e
 
 prog=${0##*/}

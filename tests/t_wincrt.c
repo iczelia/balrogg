@@ -12,9 +12,7 @@
     You should have received a copy of the GNU General Public License
     along with this program.  If not, see <http://www.gnu.org/licenses/>.  */
 
-/*  Exercise the native runtime, including ABI and console boundaries.  */
-
-#include "win32.h"
+#include "sys/win32.h"
 #include <math.h>
 #include <wchar.h>
 
@@ -85,6 +83,35 @@ static void formatting(void) {
     check(error > -1e-15 && error < 1e-15, "profiler logarithm"); }
 }
 
+static void files(void) {
+  static const char name[] = "t_wincrt-\xC3\xA9.tmp";
+  static unsigned char b[70000], c[70000];
+  FILE * f;
+  sz i;
+  Fi(sizeof b, b[i] = (unsigned char) (i * 7 + (i >> 8)));
+  f = fopen(name, "w+b");
+  check(f != NULL, "create a read-write file");
+  if (!f) return;
+  check(fwrite(b, 1, 100, f) == 100 &&
+        fwrite(b + 100, 1, sizeof b - 100, f) == sizeof b - 100 &&
+        ftell(f) == (long) sizeof b && _ftelli64(f) == (long long) sizeof b,
+        "write and tell");
+  check(!fseek(f, 3, SEEK_SET) && getc(f) == b[3] && fgetc(f) == b[4] &&
+        ftell(f) == 5, "seek and read bytes");
+  check(fread(c, 1, 10, f) == 10 && ftell(f) == 15 && !memcmp(c, b + 5, 10),
+        "read after getc");
+  check(putc('x', f) == 'x' && ftell(f) == 16 && !fseek(f, -1, SEEK_CUR) &&
+        getc(f) == 'x', "write after a read, then read it back");
+  b[15] = 'x';
+  check(!_fseeki64(f, 0, SEEK_SET) && fread(c, 1, sizeof c, f) == sizeof c &&
+        !memcmp(c, b, sizeof c) && getc(f) == EOF, "read the whole file back");
+  check(!fseek(f, 0, SEEK_END) && ftell(f) == (long) sizeof b,
+        "seek to the end");
+  check(!fclose(f), "close the read-write file");
+  check(!remove(name), "remove a file with a non-ASCII name");
+  check(!fopen(name, "rb") && remove(name), "the removed file is gone");
+}
+
 #ifndef BLR_WIN_LEGACY
 static void unicode(void) {
   static const char utf8[] = "A\xC3\xA9\xF0\x9D\x84\x9E";
@@ -128,8 +155,6 @@ static void unicode(void) {
   }
 }
 
-/*  Use an inactive console buffer so the check does not change the user's
-    screen.  Calls to fputc deliberately split a four-byte UTF-8 sequence.  */
 static void console(void) {
   HANDLE h, errors = GetStdHandle(STD_ERROR_HANDLE);
   wchar_t text[8], expected[8];
@@ -157,7 +182,6 @@ static void console(void) {
   check(ReadConsoleOutputCharacterW(h, text, 8, origin, &got) && got == count &&
         !memcmp(text, expected, got * sizeof *text),
         "console output matches WriteConsoleW");
-  /*  stdout's 4096-byte buffer ends partway through the next code point.  */
   { char fill[4095];
     COORD size = { 4098, 64 }, last = { 4095, 0 };
     check(SetConsoleScreenBufferSize(h, size) &&
@@ -169,18 +193,17 @@ static void console(void) {
           ReadConsoleOutputCharacterW(h, text, 1, last, &got) &&
           got == 1 && text[0] == 0xE9,
           "a buffer flush preserves partial UTF-8"); }
-  /*  The runtime owns the standard handle until exit flushes it.  */
 }
 #endif
 
 int blr_main(int argc, char ** argv) {
 #ifndef BLR_WIN_LEGACY
   if (argc == 2 && !strcmp(argv[1], "child \xF0\x9D\x84\x9E")) return 7;
-  /*  Set the stdout handle before any stdio call initializes the runtime.  */
   console();
 #endif
   wide_strings();
   formatting();
+  files();
 #ifndef BLR_WIN_LEGACY
   unicode();
 #endif

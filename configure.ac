@@ -12,22 +12,17 @@ dnl
 dnl  You should have received a copy of the GNU General Public License
 dnl  along with this program. If not, see <http://www.gnu.org/licenses/>.
 
-m4_define([balrogg_version_major], [1])
-m4_define([balrogg_version_minor], [3])
-m4_define([balrogg_version], [balrogg_version_major.balrogg_version_minor])
-
-AC_PREREQ([2.69])
-AC_INIT([balrogg],[balrogg_version],[https://github.com/iczelia/balrogg])
+AC_PREREQ([2.70])
+AC_INIT([balrogg], m4_esyscmd_s([build-aux/version.sh]), [https://github.com/iczelia/balrogg])
 AC_CONFIG_HEADERS([config.h])
 AC_COPYRIGHT([Copyright (C) 2026 Kamila Szewczyk])
 AC_LANG([C])
 AC_CONFIG_MACRO_DIR([m4])
+AC_CONFIG_AUX_DIR([build-aux])
 
 AC_CANONICAL_HOST
 AM_INIT_AUTOMAKE([-Wall foreign color-tests subdir-objects dist-xz])
 
-AC_PROG_INSTALL
-AC_PROG_MAKE_SET
 AC_PROG_CC
 AC_USE_SYSTEM_EXTENSIONS
 case $host_os in
@@ -38,20 +33,19 @@ AC_PROG_RANLIB
 AC_CHECK_TOOL([OBJDUMP], [objdump])
 AC_CHECK_TOOL([NM], [nm])
 
-AC_DEFINE([BLR_MAJOR], [balrogg_version_major], [Major version number])
-AC_DEFINE([BLR_MINOR], [balrogg_version_minor], [Minor version number])
+dnl  The numeric major and minor version, 0 when the version does not start with them.
+blr_major=`expr "x$PACKAGE_VERSION" : 'x\([[0-9]][[0-9]]*\)\.'`
+blr_minor=`expr "x$PACKAGE_VERSION" : 'x[[0-9]][[0-9]]*\.\([[0-9]][[0-9]]*\)'`
+AC_DEFINE_UNQUOTED([BLR_MAJOR], [${blr_major:-0}], [Major version number])
+AC_DEFINE_UNQUOTED([BLR_MINOR], [${blr_minor:-0}], [Minor version number])
 
-dnl  Identify the target in version output.
 AC_DEFINE_UNQUOTED([BLR_HOST_TRIPLE], ["$host"],
                    [Canonical host this build targets])
 
-AC_C_INLINE
-AC_C_BIGENDIAN
 AC_SYS_LARGEFILE
 
-AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h sys/mman.h \
-                  windows.h process.h])
-AC_CHECK_FUNCS([fork waitpid sysconf setrlimit mmap munmap msync fsync])
+AC_CHECK_HEADERS([unistd.h dirent.h sys/resource.h sys/wait.h sys/mman.h sys/auxv.h])
+AC_CHECK_FUNCS([fork waitpid sysconf mmap munmap msync fsync madvise sched_getaffinity getauxval])
 AC_ARG_ENABLE([mmap],
   [AS_HELP_STRING([--disable-mmap], [use heap arenas and buffered file I/O])],,
   [enable_mmap=yes])
@@ -173,16 +167,16 @@ case "$host_cpu" in
   *)                   blr_is_x86=no  ;;
 esac
 AC_ARG_ENABLE([simd],
-  [AS_HELP_STRING([--disable-simd],[build the scalar mixer only])],
+  [AS_HELP_STRING([--disable-simd],[build the scalar mixer and the portable CRC only])],
   [test "x$enableval" = "xno" && blr_skip_simd=yes])
 
 BLR_SSE2_CFLAGS=""
 BLR_AVX2_CFLAGS=""
+BLR_SSE42_CFLAGS=""
+BLR_CLMUL_CFLAGS=""
+BLR_ARMCRC_CFLAGS=""
 if test "x$blr_skip_simd" = "xno" && test "x$blr_is_x86" = "xyes"; then
-  save_CFLAGS="$CFLAGS"
-  CFLAGS="$save_CFLAGS -msse2"
-  AC_MSG_CHECKING([for SSE2 intrinsics])
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+  BLR_CHECK_ISA([SSE2 intrinsics], [-msse2], [[
       #include <emmintrin.h>
       #include <cpuid.h>
     ]], [[
@@ -191,15 +185,8 @@ if test "x$blr_skip_simd" = "xno" && test "x$blr_is_x86" = "xyes"; then
       a = _mm_madd_epi16(a, a);
       __get_cpuid(1, r, r + 1, r + 2, r + 3);
       return _mm_cvtsi128_si32(a) + (int) r[3];
-    ]])],
-    [AC_MSG_RESULT([yes])
-     AC_DEFINE([HAVE_SSE2], [1], [Define if the SSE2 mixer is built])
-     BLR_SSE2_CFLAGS="-msse2"],
-    [AC_MSG_RESULT([no])])
-  CFLAGS="$save_CFLAGS"
-  CFLAGS="$save_CFLAGS -mavx2"
-  AC_MSG_CHECKING([for AVX2 intrinsics and runtime probing])
-  AC_COMPILE_IFELSE([AC_LANG_PROGRAM([[
+    ]], [HAVE_SSE2], [Define if the SSE2 mixer is built], [BLR_SSE2_CFLAGS])
+  BLR_CHECK_ISA([AVX2 intrinsics and runtime probing], [-mavx2], [[
       #include <immintrin.h>
       #include <cpuid.h>
     ]], [[
@@ -209,17 +196,44 @@ if test "x$blr_skip_simd" = "xno" && test "x$blr_is_x86" = "xyes"; then
       __get_cpuid_count(7, 0, r, r + 1, r + 2, r + 3);
       __asm__ volatile ("xgetbv" : "=a" (lo), "=d" (hi) : "c" (0));
       return _mm256_extract_epi32(a, 0) + (int) (r[1] + lo + hi);
-    ]])],
-    [AC_MSG_RESULT([yes])
-     AC_DEFINE([HAVE_AVX2], [1], [Define if the AVX2 mixer is built])
-     BLR_AVX2_CFLAGS="-mavx2"],
-    [AC_MSG_RESULT([no])])
-  CFLAGS="$save_CFLAGS"
+    ]], [HAVE_AVX2], [Define if the AVX2 mixer is built], [BLR_AVX2_CFLAGS])
+  BLR_CHECK_ISA([SSE4.2 CRC32 intrinsics], [-msse4.2], [[
+      #include <nmmintrin.h>
+      #include <cpuid.h>
+    ]], [[
+      unsigned r[4];
+      __get_cpuid(1, r, r + 1, r + 2, r + 3);
+      return (int) (_mm_crc32_u32(_mm_crc32_u8(0, 1), r[2]));
+    ]], [HAVE_SSE42], [Define if the SSE4.2 CRC-32C is built], [BLR_SSE42_CFLAGS])
+  BLR_CHECK_ISA([PCLMULQDQ intrinsics], [-msse4.1 -mpclmul], [[
+      #include <smmintrin.h>
+      #include <wmmintrin.h>
+      #include <cpuid.h>
+    ]], [[
+      unsigned r[4];
+      __m128i a;
+      __get_cpuid(1, r, r + 1, r + 2, r + 3);
+      a = _mm_clmulepi64_si128(_mm_set_epi64x(1, (long long) r[2]), _mm_set_epi64x(3, 5), 0x11);
+      return _mm_extract_epi32(_mm_shuffle_epi8(a, a), 0);
+    ]], [HAVE_CLMUL], [Define if the carry-less multiplication Ogg CRC is built], [BLR_CLMUL_CFLAGS])
+fi
+if test "x$blr_skip_simd" = "xno" && test "x$host_cpu" = "xaarch64"; then
+  BLR_CHECK_ISA([ARMv8 CRC32 intrinsics], [-march=armv8-a+crc], [[
+      #include <arm_acle.h>
+    ]], [[
+      return (int) __crc32cd(__crc32cb(0, 1), 2);
+    ]], [HAVE_ARM_CRC32], [Define if the ARMv8 CRC-32C is built], [BLR_ARMCRC_CFLAGS])
 fi
 AC_SUBST([BLR_SSE2_CFLAGS])
 AM_CONDITIONAL([BLR_SSE2], [test "x$BLR_SSE2_CFLAGS" != "x"])
 AC_SUBST([BLR_AVX2_CFLAGS])
 AM_CONDITIONAL([BLR_AVX2], [test "x$BLR_AVX2_CFLAGS" != "x"])
+AC_SUBST([BLR_SSE42_CFLAGS])
+AM_CONDITIONAL([BLR_SSE42], [test "x$BLR_SSE42_CFLAGS" != "x"])
+AC_SUBST([BLR_CLMUL_CFLAGS])
+AM_CONDITIONAL([BLR_CLMUL], [test "x$BLR_CLMUL_CFLAGS" != "x"])
+AC_SUBST([BLR_ARMCRC_CFLAGS])
+AM_CONDITIONAL([BLR_ARMCRC], [test "x$BLR_ARMCRC_CFLAGS" != "x"])
 
 AX_APPEND_COMPILE_FLAGS([-Wall -Wextra -Wshadow -Wpointer-arith -Wcast-align \
   -Wwrite-strings \
@@ -232,7 +246,7 @@ AC_SUBST([BLR_HARDEN_CFLAGS])
 
 AC_ARG_ENABLE([sanitizers],
   [AS_HELP_STRING([--enable-sanitizers=LIST],
-    [build with address,undefined (or yes), undefined, or thread sanitizer])],
+    [build with address,undefined (or yes) or undefined sanitizers])],
   [enable_sanitizers=$enableval], [enable_sanitizers=no])
 case "$enable_sanitizers" in
   no) ;;
@@ -248,15 +262,32 @@ case "$enable_sanitizers" in
                             [BLR_SAN_CFLAGS])
     AX_APPEND_LINK_FLAGS([-fsanitize=undefined], [BLR_SAN_LDFLAGS])
     ;;
-  thread)
-    AX_APPEND_COMPILE_FLAGS([-fsanitize=thread -fno-omit-frame-pointer],
-                            [BLR_SAN_CFLAGS])
-    AX_APPEND_LINK_FLAGS([-fsanitize=thread], [BLR_SAN_LDFLAGS])
-    ;;
   *) AC_MSG_ERROR([unknown sanitizer selection: $enable_sanitizers]) ;;
 esac
 AC_SUBST([BLR_SAN_CFLAGS])
 AC_SUBST([BLR_SAN_LDFLAGS])
+
+dnl  Linux images: C needs no unwind tables, and the linker drops unreferenced sections.
+BLR_SIZE_CFLAGS=""
+BLR_SIZE_LDFLAGS=""
+case "$host_os" in
+  linux*)
+    AS_IF([test "x$enable_sanitizers" = xno],
+      [AX_APPEND_COMPILE_FLAGS([-fno-asynchronous-unwind-tables -fno-unwind-tables],
+                               [BLR_SIZE_CFLAGS])])
+    AX_APPEND_COMPILE_FLAGS([-ffunction-sections -fdata-sections], [BLR_SIZE_CFLAGS])
+    AX_APPEND_LINK_FLAGS([-Wl,--gc-sections], [BLR_SIZE_LDFLAGS])
+    ;;
+esac
+AC_SUBST([BLR_SIZE_CFLAGS])
+AC_SUBST([BLR_SIZE_LDFLAGS])
+AC_ARG_ENABLE([region-check],
+  [AS_HELP_STRING([--enable-region-check],
+    [check the allocation region: canaries, filled and delayed free blocks, walks of every block])],
+  [enable_region_check=$enableval], [enable_region_check=no])
+if test "x$enable_region_check" = xyes; then
+  AC_DEFINE([BLR_REGION_CHECK], [1], [Define to check the allocation region's blocks])
+fi
 if test "x$enable_sanitizers" != "xno"; then
   dnl  ASan needs the address-space cap disabled.
   AC_DEFINE([BLR_SANITIZED], [1],
@@ -273,16 +304,22 @@ if test -z "$BLR_TIMEOUT_PROG"; then
 fi
 AC_SUBST([BLR_TIMEOUT_PROG])
 
-AC_CONFIG_FILES([Makefile])
+dnl  The date of the source, for the manual page.
+AC_SUBST([BLR_DATE], [m4_esyscmd_s([build-aux/version.sh --date])])
+
+AC_CONFIG_FILES([Makefile balrogg.1])
 AC_OUTPUT
 
 AC_MSG_NOTICE([
 
-  balrogg balrogg_version configuration
+  balrogg $PACKAGE_VERSION configuration
     host          : $host
     Windows target: $blr_win_target
     SSE2 mixer    : ${BLR_SSE2_CFLAGS:-no}
     AVX2 mixer    : ${BLR_AVX2_CFLAGS:-no}
+    CRC-32C       : portable${BLR_SSE42_CFLAGS:+, sse4.2}${BLR_ARMCRC_CFLAGS:+, armv8-crc}
+    Ogg CRC       : portable${BLR_CLMUL_CFLAGS:+, pclmul}
     sanitizers    : $enable_sanitizers
+    region check  : $enable_region_check
     CFLAGS        : $CFLAGS
 ])

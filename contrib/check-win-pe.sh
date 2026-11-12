@@ -67,7 +67,7 @@ if test "$(grep -ci 'DLL Name:' "$tmp")" -ne 1 ||
   echo 'windows-check: executable imports a DLL other than KERNEL32' >&2
   exit 1
 fi
-if grep -Eq '(CreateFile|CreateProcess|GetCommandLine|GetFileAttributes|'\
+if grep -Eq '(CreateFile|CreateProcess|DeleteFile|GetCommandLine|GetFileAttributes|'\
 'GetModuleFileName|GetEnvironmentVariable)A$' "$tmp"; then
   echo 'windows-check: an ANSI path or argument API is imported' >&2
   exit 1
