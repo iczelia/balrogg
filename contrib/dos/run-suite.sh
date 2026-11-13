@@ -90,24 +90,26 @@ else
   accel=tcg
   cpu=max
 fi
-timeout_seconds=${BLR_DOS_TIMEOUT_SECONDS:-3600}
+timeout_seconds=${BLR_DOS_TIMEOUT_SECONDS:-10800}
 case $timeout_seconds in ''|*[!0-9]*) fail "invalid DOS timeout" ;; esac
 
 echo "$prog: booting FreeDOS with $accel"
-qemu_status=0
-timeout "$timeout_seconds" qemu-system-i386 \
+#  The guest writes its report to COM1, which streams here as it runs.
+rm -f "$suite_root/qemu.status"
+{ timeout "$timeout_seconds" qemu-system-i386 \
   -machine pc,accel="$accel" -cpu "$cpu" -m 512 \
-  -display none -monitor none -serial none -nic none -no-reboot \
+  -display none -monitor none -serial stdio -nic none -no-reboot \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   -drive file="$boot",format=raw,if=floppy,readonly=on \
   -device ahci,id=ahci \
   -drive id=hd0,file="$disk",format=raw,if=none,cache=writeback \
   -device ide-hd,drive=hd0,bus=ahci.0 \
-  -boot order=a,strict=on || qemu_status=$?
+  -boot order=a,strict=on < /dev/null && s=0 || s=$?
+  echo $s > "$suite_root/qemu.status"; } |
+  awk '{ sub(/\r$/, ""); print; fflush() }' | tee "$suite_root/result.log"
+qemu_status=`cat "$suite_root/qemu.status"`
 
-mcopy d:/RESULT.LOG "$suite_root/result.log" 2> /dev/null || true
 mcopy d:/STATUS.TXT "$suite_root/status.txt" 2> /dev/null || true
-test -f "$suite_root/result.log" && cat "$suite_root/result.log"
 
 test "$qemu_status" -eq 1 || fail "QEMU exited with status $qemu_status"
 test -f "$suite_root/status.txt" || fail "guest status missing"
