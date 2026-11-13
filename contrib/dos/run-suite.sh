@@ -96,11 +96,13 @@ case $timeout_seconds in ''|*[!0-9]*) fail "invalid DOS timeout" ;; esac
 echo "$prog: booting FreeDOS with $accel"
 qemu_status=0
 timeout "$timeout_seconds" qemu-system-i386 \
-  -machine pc,accel="$accel" -cpu "$cpu" -m 256 \
+  -machine pc,accel="$accel" -cpu "$cpu" -m 512 \
   -display none -monitor none -serial none -nic none -no-reboot \
   -device isa-debug-exit,iobase=0xf4,iosize=0x04 \
   -drive file="$boot",format=raw,if=floppy,readonly=on \
-  -drive file="$disk",format=raw,if=ide,index=0,cache=writeback \
+  -device ahci,id=ahci \
+  -drive id=hd0,file="$disk",format=raw,if=none,cache=writeback \
+  -device ide-hd,drive=hd0,bus=ahci.0 \
   -boot order=a,strict=on || qemu_status=$?
 
 mcopy d:/RESULT.LOG "$suite_root/result.log" 2> /dev/null || true
