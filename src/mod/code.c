@@ -112,13 +112,10 @@ static int frame(mx * m, sz n) {
     sz hl = ns == 31 ? MOD_HDR31 : MOD_HDR15;
     memcpy(t, h, hl);
     if (!m->dec) mod_xform(t, ns, 0);
-    m->tm[1] = now();
     header(m, ns, t);
-    m->tm[2] = now();
     mod_xform(t, ns, 1);
     memcpy(h, t, hl);
     if (ns == 31 && !mod_tag_ch(h + 1080)) return -1; }
-  MARK(m, 4);
   if (n < (ns == 31 ? MOD_HDR31 : MOD_HDR15)) return -1;
   p0 = mod_p0(h, ns);
   if (!num(m, np == p0, 2, F_NP0, 0, 0, 0)) {
@@ -227,7 +224,6 @@ void rt_row(rtrk * t, const mx * m, sz i) {
 static void init(mx * m, int dec, u8 * h, int cfg) {
   int i;
   memset(m, 0, sizeof *m);
-  m->tm[0] = now();
   m->dec = dec;  m->h = h;  m->cf = &CFG[cfg - MOD_CFG0];
   m->q = acm_new(ACM_VLITE | ACM_APMS);
   m->d = acm_d(m->q);
@@ -252,7 +248,6 @@ static void rest(mx * m) {
     bytes(m, m->out ? m->out + L->pat + pb : tmp,
           m->in ? m->in + L->pat + pb : NULL, pr, 1);
   }
-  MARK(m, 1);
   if (L->tlen) {
     u8 * t = m->out ? m->out + L->tail : xmalloc(L->tlen);
     bytes(m, t, m->in ? m->in + L->tail : NULL, L->tlen, 2);
@@ -265,19 +260,14 @@ static void samples(mx * m) {
   const int ls = m->sc->se == SE_LS;
   void * st;
   int i;
-  m->tm[3] = now();
   st = ls ? smp_ls_new(m) : smp_fast_new(m);
   m->ty = T_PCM;
   Fi(L->ns,
     const u8 * src = m->in ? m->in + L->sat[i] : NULL;
     u8 * dst = m->out ? m->out + L->sat[i] : NULL;
-    double c0 = m->cost[T_PCM];
     if (!L->slen[i]) continue;
     if (ls) smp_ls_one(m, st, i, src, dst, L->slen[i]);
-    else smp_fast_one(m, st, i, src, dst, L->slen[i]);
-    if (!m->dec && getenv("BLR_MOD_STATS"))
-      fprintf(stderr, "modsmp %d %lu %.1f\n", i, (unsigned long) L->slen[i],
-              m->cost[T_PCM] - c0));
+    else smp_fast_one(m, st, i, src, dst, L->slen[i]));
   if (ls) smp_ls_free(st);
   else smp_fast_free(st);
 }
@@ -286,15 +276,12 @@ static void body(mx * m) {
   sz nc = m->L.ncell + 1;
   m->nt = xmalloc(nc);  m->sm = xmalloc(nc);
   m->ef = xmalloc(nc);  m->pa = xmalloc(nc);
-  MARK(m, 0);
   switch (m->cf->pe) {
   case PE_FAST: pat_fast(m);  break;
   default: pat_cm(m);
   }
   rest(m);
-  MARK(m, 2);
   samples(m);
-  MARK(m, 3);
 }
 
 sz mod_code(const u8 * b, sz n, int cfg, int scfg, u8 ** out) {
@@ -316,22 +303,6 @@ sz mod_code(const u8 * b, sz n, int cfg, int scfg, u8 ** out) {
   FATAL_UNLESS(!memcmp(h, b, m->L.hdr), "internal: MOD header transform");
   FATAL_UNLESS(!alphabet(m), "internal: MOD period alphabet");
   body(m);
-  if (getenv("BLR_MOD_STATS"))
-    fprintf(stderr, "modstats %lu %lu %lu %lu %lu %lu\n", (unsigned long) n,
-            (unsigned long) m->mark[0], (unsigned long) (m->mark[1] - m->mark[0]),
-            (unsigned long) (m->L.tail - m->L.smp),
-            (unsigned long) (m->mark[2] - m->mark[1]),
-            (unsigned long) m->mark[4]);
-  if (getenv("BLR_MOD_STATS")) {
-    int k;
-    fprintf(stderr, "modtime %.6f %.6f %.6f %.6f\n", m->tm[1] - m->tm[0],
-            m->tm[2] - m->tm[1], (m->tm[3] ? m->tm[3] : now()) - m->tm[2],
-            m->tm[3] ? now() - m->tm[3] : 0.0);
-    fprintf(stderr, "modcost");
-    for (k = 0; k < 16; k++) fprintf(stderr, " %.0f", m->cost[k] / 8);
-    for (k = 0; k < 4; k++) fprintf(stderr, " %.0f", m->ccost[k] / 8);
-    fprintf(stderr, "\n");
-  }
   len = rc_enc_finish(&m->e);
   *out = xmalloc(5 + len);
   (*out)[0] = (u8) (scfg - MOD_SCFG0);

@@ -23,10 +23,6 @@ enum {
 enum { G_GAP, G_ORD, G_MSG, G_PAT, G_OPQ, G_ODD };
 
 typedef struct { u8 ch, mp, m, has, f[5]; } pent;
-enum {
-  S_HDR, S_INS, S_SHD, S_LAY, S_PAT, S_MSG, S_ZS, S_S8, S_S16, S_OPQ, S_N
-};
-
 typedef struct {
   mx b;
   it_lay L;
@@ -36,16 +32,9 @@ typedef struct {
   u8 * gap;
   sz * gl;
   u32 zp[ITZ_K_N];
-  sz sc[S_N], sraw[S_N], slast;
-  int scur, s16c, stc, f;
+  int s16c, stc, f;
   struct ist * z;
 } ix;
-
-static void sec(ix * x, int k) {
-  sz p = x->b.dec ? 0 : x->b.e.len + x->b.e.pending;
-  x->sc[x->scur] += p - x->slast;
-  x->slast = p;  x->scur = k;
-}
 
 static int rc_cb(void * ctx, int bit, u32 p0) { return mx_bit(ctx, bit, p0); }
 
@@ -279,8 +268,6 @@ static void pcm8(ix * x, const i16 * src, i16 * dst, sz n) {
 
 static void pcm(ix * x, const i16 * src, i16 * dst, sz n) {
   if (!n) return;
-  sec(x, S_S8);
-  x->sraw[S_S8] += n;
   pcm8(x, src, dst, n);
 }
 
@@ -289,8 +276,6 @@ static void chans(ix * x, const i16 * src, i16 * dst, sz nv, sz fr, int b16) {
   if (b16) {
     if (!nv) return;
     if (!x->s16) x->s16 = s16_new(x->s16c);
-    sec(x, S_S16);
-    x->sraw[S_S16] += nv << 1;
     s16_smp(&x->b, x->s16, src, dst, nv, fr);
     return;
   }
@@ -304,8 +289,6 @@ static void chans(ix * x, const i16 * src, i16 * dst, sz nv, sz fr, int b16) {
 static int opaque(ix * x, it_ent * e) {
   mx * m = &x->b;
   u32 len;
-  sec(x, S_OPQ);
-  x->sraw[S_OPQ] += e->len;
   len = gnum(m, (u32) e->len, F_OLEN, 0, 0);
   if (len > x->L.n) return -1;
   own(x, e, len);
@@ -340,8 +323,6 @@ static int compressed(ix * x, it_ent * e, const u8 * s) {
     xfree(p);  itz_free(&si);
     return opaque(x, e);
   }
-  sec(x, S_ZS);
-  x->sraw[S_ZS] += e->len;
   if (m->dec) {
     if (nv > 8 * (uint64_t) x->L.n + 65536) return -1;
     p = xmalloc((sz) nv * 2 + 2);
@@ -407,11 +388,8 @@ static int body(ix * x) {
   u32 i, ps = 0;
   memset(ph, 0, sizeof ph);
   Fi(L->inn + L->sn + L->pn, est(x, i, &ps));
-  sec(x, S_INS);
   structs(x, IK_INS, 0, L->inn);
-  sec(x, S_SHD);
   structs(x, IK_SHD, L->inn, L->inn + L->sn);
-  sec(x, S_LAY);
   ps = 0;
   Fi(L->sn,
     it_ent * e = L->e + it_esmp(L, i);
@@ -428,9 +406,7 @@ static int body(ix * x) {
     Fi(L->ne, L->np += L->e[i].st == IS_PRI);
   }
   if (order(x) || gaps(x) || clip(x)) return -1;
-  sec(x, S_PAT);
   if (pats(x)) return -1;
-  sec(x, S_MSG);
   if (L->e[L->ne - 1].st == IS_PRI) {
     it_ent * e = L->e + L->ne - 1;
     e->len = rd16le(x->h + 0x36);
@@ -444,7 +420,6 @@ static int body(ix * x) {
     if (!it_smp_cmp(x->f, s) ? raw(x, e, s) : x->f == IT_FS3M ? opaque(x, e)
                                             : compressed(x, e, s))
       return -1);
-  sec(x, S_HDR);
   return 0;
 }
 
@@ -515,13 +490,6 @@ sz it_code(const u8 * b, sz n, const it_cfg * c, u8 ** out) {
     header(x);
     tables(x);
     FATAL_UNLESS(!body(x), "internal: IT layout");
-  }
-  if (getenv("BLR_IT_STATS")) {
-    int k;
-    fprintf(stderr, "itstats %lu", (unsigned long) n);
-    Fk(S_N, fprintf(stderr, " %lu %lu", (unsigned long) x->sc[k],
-                    (unsigned long) x->sraw[k]));
-    fprintf(stderr, "\n");
   }
   len = rc_enc_finish(&x->b.e);
   *out = xmalloc(len + 2);

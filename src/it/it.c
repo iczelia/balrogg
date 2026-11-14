@@ -92,14 +92,12 @@ static const u8 LEVELSX[BLR_NLEV][3] = {
 };
 
 void it_level(int level, int fmt, it_cfg * c) {
-  const char * d = getenv("BLR_MOD_SCFG"), * e = getenv("BLR_IT_S16"),
-             * f = getenv("BLR_IT_ST");
   const int k = CLAMP(level, 1, BLR_NLEV) - 1;
   const u8 * l = fmt == IT_FIT ? LEVELS[k] : fmt == IT_FS3M ? LEVELS3[k]
                                                            : LEVELSX[k];
-  c->s8 = d ? atoi(d) : MOD_SCFG0 + l[0];
-  c->s16 = e ? atoi(e) : IT_S16C0 + l[1];
-  c->st = f ? atoi(f) : IT_STC0 + l[2];
+  c->s8 = MOD_SCFG0 + l[0];
+  c->s16 = IT_S16C0 + l[1];
+  c->st = IT_STC0 + l[2];
 }
 
 int it_pack(const char * in, const char * out, const it_cfg * g, int f) {

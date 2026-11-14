@@ -50,14 +50,10 @@ static const u8 LEVELS[BLR_NLEV] = {
 };
 
 int mod_level_scfg(int level) {
-  const char * e = getenv("BLR_MOD_SCFG");
-  if (e) return atoi(e);
   return MOD_SCFG0 + SLEVELS[CLAMP(level, 1, BLR_NLEV) - 1];
 }
 
 int mod_level_cfg(int level) {
-  const char * e = getenv("BLR_MOD_CFG");
-  if (e) return atoi(e);
   return MOD_CFG0 + LEVELS[CLAMP(level, 1, BLR_NLEV) - 1];
 }
 

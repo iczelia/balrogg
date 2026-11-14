@@ -441,7 +441,7 @@ RG_RAW void rg_give(void * p) {
     rg_set(h, RG_HELD);
   } else rg_mine(p, "a block freed twice");
   c = h->c;  size = rg_csize(c);
-#if defined(HAVE_MADVISE) && defined(MADV_DONTNEED)
+#if defined(HAVE_MADVISE) && defined(MADV_DONTNEED) && defined(__linux__)
   if (size >= RG_TRIM) {
     u8 * lo, * hi;
     rg_pages(b, c, &lo, &hi);

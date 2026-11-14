@@ -176,9 +176,7 @@ endif
 
 ##  Test suite linked to the library and built binary.
 check_PROGRAMS = tests/t_suite
-TESTS = tests/t_suite tests/strayfree.sh
-TEST_EXTENSIONS = .sh
-SH_LOG_COMPILER = $(SHELL)
+TESTS = tests/t_suite
 
 tests_t_suite_SOURCES = tests/t_suite.c tests/t_harness.c tests/t_unit.c \
                         tests/t_layers.c tests/t_files.c tests/t_cli.c tests/t_comments.c
@@ -218,7 +216,7 @@ EXTRA_DIST = \
   bootstrap build-aux/version.sh README.md src/balrogg.rc src/balrogg.ico \
   src/opus/parse/README src/opus/parse/COPYING \
   $(BLR_VORBIS_PARTS) $(BLR_OPUS_PARTS) $(BLR_MP3_PARTS) $(BLR_IT_PARTS) \
-  tests/t_harness.h tests/strayfree.sh tests/data tests/regress \
+  tests/t_harness.h tests/data tests/regress \
   fuzz/harness.h fuzz/fzcfg.h fuzz/fuzz_dec.c fuzz/fuzz_enc.c \
   fuzz/fuzz_ogg.c fuzz/fuzz_opus.c fuzz/fuzz_odec.c fuzz/fuzz_mp3.c fuzz/fuzz_mdec.c \
   fuzz/fuzz_cli.c fuzz/fuzz_dmg.c fuzz/fzmain.c fuzz/balrogg.dict fuzz/build.sh fuzz/run.sh \

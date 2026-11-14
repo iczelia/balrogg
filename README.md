@@ -89,7 +89,7 @@ native build's. Windows builds use MinGW as follows:
 make
 ```
 
-A Windows 95 build uses a small KERNEL32 runtime and targets i486.
+A windows 9x build (as opposed to the Windows NT build) targets i486.
 
 ```sh
 ./configure --host=i686-w64-mingw32 --with-windows-target=win95 \

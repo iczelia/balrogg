@@ -234,14 +234,6 @@ static INLINE int nn_step(nnr * f, int * e, int pk, const int n,
 
 typedef struct { u32 lo, rg, cd;  int cy; } lrc;
 
-#ifdef MOD_STATS
-#define LCOST(m, b, p) \
-  if (!(m)->dec) \
-    (m)->cost[T_PCM] -= nlog2(((b) ? 65536.0 - (p) : (double) (p)) / 65536)
-#else
-#define LCOST(m, b, p) ((void) 0)
-#endif
-
 static INLINE void lnorm(mx * m, lrc * c, const int dec) {
   if (dec)
     while (c->rg < RC_TOP) { c->cd = c->cd << 8 | rc_get(&m->r);  c->rg <<= 8; }
@@ -262,7 +254,6 @@ static INLINE void laddlo(lrc * c, u32 v) {
 
 static INLINE int lbit(mx * m, lrc * c, const int dec, u32 * s, int bit) {
   u32 st = *s, p = rc_packed_prob(st), sp;
-  LCOST(m, bit, p);
   if (dec) {
     lnorm(m, c, dec);
     sp = (c->rg >> 16) * p;
@@ -281,9 +272,6 @@ static INLINE int lbit(mx * m, lrc * c, const int dec, u32 * s, int bit) {
 
 static INLINE u32 lraw(mx * m, lrc * c, const int dec, u32 v, int k) {
   u32 r, q;
-#ifdef MOD_STATS
-  if (!dec) m->cost[T_PCM] += k;
-#endif
   if (dec) {
     lnorm(m, c, dec);
     r = c->rg >> k;  q = c->cd / r;
@@ -391,9 +379,6 @@ static INLINE int lsym(mx * m, lrc * c, const int dec, u16 * f, u8 * n,
     c->rg = r * (qh - ql);
     lnorm(m, c, dec);
   }
-#ifdef MOD_STATS
-  if (!dec) m->cost[T_PCM] -= nlog2((double) (qh - ql) / CT);
-#endif
   cdf_upd(f, s, *n < 3 ? 2 : *n < 10 ? 3 : *n < 40 ? 4 : *n < 160 ? 5 : 6);
   if (*n < 255) ++*n;
   return s;

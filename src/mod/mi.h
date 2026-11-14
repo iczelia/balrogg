@@ -20,7 +20,6 @@
 #include "mod/mod.h"
 #include "coder/acm.h"
 #include "coder/rc.h"
-#include <time.h>
 
 enum {
   T_KIND, T_HDR, T_SNUM, T_NOTE, T_PITCH, T_PIDX, T_SMP, T_EFF, T_PAR, T_TAIL,
@@ -56,35 +55,9 @@ typedef struct mx {
   u16 aper[4096];
   u16 aoff[MOD_NSEMI + 1];
   u8 * nt, * sm, * ef, * pa, * tdup;
-  sz mark[5];
-  double cost[16], ccost[4];
-  int cls;
-  double tm[4];
 } mx;
 
-static INLINE double now(void) {
-  struct timespec t;
-  clock_gettime(CLOCK_MONOTONIC, &t);
-  return t.tv_sec + t.tv_nsec * 1e-9;
-}
-
-static INLINE double nlog2(double v) {
-  double y, t, sum = 0;
-  int e = 0, k;
-  while (v < 1) { v *= 2;  e--; }
-  while (v >= 2) { v /= 2;  e++; }
-  y = (v - 1) / (v + 1);  t = y;
-  for (k = 1; k < 40; k += 2) { sum += t / k;  t *= y * y; }
-  return e + 2 * sum / 0.69314718055994531;
-}
-
-#define MARK(m, k) ((m)->mark[k] = (m)->dec ? 0 : (m)->e.len + (m)->e.pending)
 static INLINE int mx_bit(mx * m, int bit, u32 p0) {
-#ifdef MOD_STATS
-  if (!m->dec && m->ty >= T_NOTE && m->ty <= T_PAR)
-    m->ccost[m->cls] -= nlog2((bit ? 65536.0 - p0 : (double) p0) / 65536);
-  if (!m->dec) m->cost[m->ty] -= nlog2((bit ? 65536.0 - p0 : (double) p0) / 65536);
-#endif
   if (m->dec) return rc_dec_bit_raw(&m->r, p0);
   rc_enc_bit_raw(&m->e, p0, bit);
   return bit;

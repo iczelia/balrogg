@@ -344,8 +344,6 @@ static int xsmp(ix * x, const u8 * s, u8 * t, sz r, uint64_t * len,
   i16 * p;
   *len = l;  *cl = full > r;
   if (s[17] == 0xAD && !b16) {
-    sec(x, S_OPQ);
-    x->sraw[S_OPQ] += l;
     gbytes(m, t, l, G_OPQ);
     return 0;
   }
@@ -377,7 +375,6 @@ static int xm_code(ix * x, u8 * o) {
   zc * z;
   mx * m = &x->b;
   const sz n = x->L.n;
-  static const u8 SK[XE_END] = { S_HDR, S_PAT, S_INS, S_SHD, S_S8 };
   xw w;
   xst s;
   sz pos = 0;
@@ -396,15 +393,10 @@ static int xm_code(ix * x, u8 * o) {
     u32 i;
     if (!m->dec)
       ok = !xlen(&w, k, o, n, pos, &len) && (k == XE_SMP || len <= r);
-    sec(x, S_LAY);
     z->n = 2;
     z->h[0] = ZH2(0x901, k);
     z->h[1] = ZH3(0x902, k, !r);
     if (!zflag(m, z, ok, ZH2(0x903, k), ZH2(0x904, 0))) break;
-    if (k != XE_SMP) {
-      sec(x, SK[k]);
-      x->sraw[SK[k]] += (sz) MIN(len, r);
-    }
     switch (k) {
     case XE_HDR:
       bad = xhdr(x, t, r, &len);
@@ -427,12 +419,7 @@ static int xm_code(ix * x, u8 * o) {
     pos += (sz) len;
     pk = k;
   }
-  if (!bad) {
-    sec(x, S_LAY);
-    x->sraw[S_LAY] += n - pos;
-    zgap(x, o + pos, n - pos, 0, (u32) pk, IK_N);
-  }
-  sec(x, S_HDR);
+  if (!bad) zgap(x, o + pos, n - pos, 0, (u32) pk, IK_N);
   pst_free(s.p);
   xfree(w.sh);
   return bad ? -1 : 0;

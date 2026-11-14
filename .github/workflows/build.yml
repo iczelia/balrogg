@@ -112,7 +112,7 @@ jobs:
       - name: Test suite under each mixer kernel
         run: |
           ./balrogg --version
-          BLR_SIMD=sse2 ./balrogg --version | grep -q 'sse2 dispatched' \
+          BLR_SIMD=sse2 ./balrogg --version | grep -qE 'sse2( \(inlined\))? dispatched' \
             || { echo "the SSE2 mixer was not dispatched"; exit 1; }
           VERBOSE=1 make check-simd
 
@@ -199,7 +199,7 @@ jobs:
         run: |
           ./balrogg --version
           if [ "${{ matrix.simd }}" = enable-simd ]; then
-            BLR_SIMD=sse2 ./balrogg --version | grep -q 'sse2 dispatched' \
+            BLR_SIMD=sse2 ./balrogg --version | grep -qE 'sse2( \(inlined\))? dispatched' \
               || { echo "the SSE2 mixer was not dispatched"; exit 1; }
           else
             ./balrogg --version | grep -q 'none built, scalar dispatched' \
