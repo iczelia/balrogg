@@ -41,6 +41,7 @@ typedef struct {
 void acm_prepare(void);
 enum { ACM_VORBIS, ACM_OPUS, ACM_VLITE, ACM_OPUSG, ACM_VORBISG };
 #define ACM_W16   0x100
+#define ACM_APMS  0x200
 acm * acm_new(int prof);
 enum { ACM_EFULL, ACM_ELITE, ACM_EAPM, ACM_EPRI };
 void acm_class(acm * q, int ty, int e, int ncap);

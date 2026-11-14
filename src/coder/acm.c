@@ -138,9 +138,11 @@ static i32 * w2new(sz mr, sz ns) {
 acm * acm_new(int prof) {
   acm * q = xmalloc(sizeof *q);
   sz i, j, ns, tb, mr, ar;
+  int apms;
   acm_prepare();
   memset(q, 0, sizeof *q);
-  q->w16 = (prof & ACM_W16) != 0;  prof &= ~ACM_W16;
+  q->w16 = (prof & ACM_W16) != 0;  apms = (prof & ACM_APMS) != 0;
+  prof &= ~(ACM_W16 | ACM_APMS);
   if (prof == ACM_OPUS || prof == ACM_OPUSG) {
     q->lrmin = 262;  q->lr2 = 131;  q->apw = 20;  q->flim = 40;  q->conf = 0;
     if (prof == ACM_OPUSG) { q->apw = 50;  q->conf = GATEN; }
@@ -154,27 +156,30 @@ acm * acm_new(int prof) {
   q->lite = prof == ACM_VLITE;
   tb = (sz) 1 << (q->lite ? LTBITS : TBITS);
   mr = q->lite ? LMROWS : MROWS;  ar = q->lite ? LAROWS : AROWS;
-  bm_alloc_huge(&q->tmap, tb * sizeof (slot));
-  q->t = (slot *) (void *) q->tmap.p;
-  q->sm = xcalloc(2 * smn(), sizeof *q->sm);
-  Fi(smn(),
-    q->sm[2 * i] = (u16) (acm_squash(((int) (i & 15) - 8) * 256 + 128) << 4));
-  if (q->w16) {
-    bm_alloc_huge(&q->wmap, (sz) ACM_NSEL * mr * NIN16 * sizeof *q->h1);
-    q->h1 = (i16 *) (void *) q->wmap.p;
-    Fi((sz) ACM_NSEL * mr, q->h1[i * NIN16] = 16384);
-  } else {
-    bm_alloc_huge(&q->wmap, ((sz) ACM_NSEL * mr * NIN + 8) * sizeof *q->w1);
-    q->w1 = (i32 *) (void *) q->wmap.p;
-    Fi((sz) ACM_NSEL * mr, q->w1[i * NIN] = 65536);
+  if (!apms) {
+    bm_alloc_huge(&q->tmap, tb * sizeof (slot));
+    q->t = (slot *) (void *) q->tmap.p;
+    q->sm = xcalloc(2 * smn(), sizeof *q->sm);
+    Fi(smn(),
+      q->sm[2 * i] = (u16) (acm_squash(((int) (i & 15) - 8) * 256 + 128) << 4));
+    if (q->w16) {
+      bm_alloc_huge(&q->wmap, (sz) ACM_NSEL * mr * NIN16 * sizeof *q->h1);
+      q->h1 = (i16 *) (void *) q->wmap.p;
+      Fi((sz) ACM_NSEL * mr, q->h1[i * NIN16] = 16384);
+    } else {
+      bm_alloc_huge(&q->wmap, ((sz) ACM_NSEL * mr * NIN + 8) * sizeof *q->w1);
+      q->w1 = (i32 *) (void *) q->wmap.p;
+      Fi((sz) ACM_NSEL * mr, q->w1[i * NIN] = 65536);
+    }
+    q->w1n = xcalloc((sz) ACM_NSEL * mr, sizeof *q->w1n);
+    ns = q->lite ? ACM_NLSEL : ACM_NSEL;
+    q->w2 = w2new(mr, ns);
   }
-  q->w1n = xcalloc((sz) ACM_NSEL * mr, sizeof *q->w1n);
-  ns = q->lite ? ACM_NLSEL : ACM_NSEL;
-  q->w2 = w2new(mr, ns);
-  Fj(3,
-    q->a[j] = xmalloc(ar * 33 * sizeof *q->a[j]);
-    Fi(ar * 33,
-      q->a[j][i] = (u16) (acm_squash(((int) (i % 33) - 16) * 128) * 16)));
+  { u16 row[33];
+    Fi(33, row[i] = (u16) (acm_squash(((int) i - 16) * 128) * 16));
+    Fj(3,
+      q->a[j] = xmalloc(ar * 33 * sizeof *q->a[j]);
+      Fi(ar, memcpy(q->a[j] + i * 33, row, sizeof row))); }
   return q;
 }
 
