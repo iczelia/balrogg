@@ -496,7 +496,7 @@ static void floors(io * z) {
 
 static void residues(io * z) {
   vb_setup * s = z->v->cur;
-  u32 nr, k, i, j, cb, m0, m1, v, c;
+  u32 nr, k, i, j, cb, m0, m1, v, c, fl;
   vb_res * q;
   nr = fld(z, M_NRES, 6, 0) + 1;
   s->rs = xmalloc(nr * sizeof *s->rs);  s->nrs = nr;
@@ -519,11 +519,8 @@ static void residues(io * z) {
     Fi(q->ncl,
       c = 0;
       if (z->enc) {
-        c = bget(z, 3);
-        if (bget(z, 1)) {
-          c |= bget(z, 5) << 3;
-          FATAL_UNLESS(c >> 3, "vorbis: invalid cascade flag");
-        }
+        c = bget(z, 3);  fl = bget(z, 1);  if (fl) c |= bget(z, 5) << 3;
+        FATAL_UNLESS(!fl || c >> 3, "vorbis: invalid cascade flag");
       }
       c = mv(z, S_BULK, M_CASC, c, 0);
       FATAL_UNLESS(c < 256, "vorbis: residue cascade %lu", (unsigned long) c);
