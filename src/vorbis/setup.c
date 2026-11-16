@@ -518,7 +518,13 @@ static void residues(io * z) {
     m1 = cb - z->v->pb;  m0 = cb;  z->v->pb = cb;
     Fi(q->ncl,
       c = 0;
-      if (z->enc) { c = bget(z, 3);  if (bget(z, 1)) c |= bget(z, 5) << 3; }
+      if (z->enc) {
+        c = bget(z, 3);
+        if (bget(z, 1)) {
+          c |= bget(z, 5) << 3;
+          FATAL_UNLESS(c >> 3, "vorbis: invalid cascade flag");
+        }
+      }
       c = mv(z, S_BULK, M_CASC, c, 0);
       FATAL_UNLESS(c < 256, "vorbis: residue cascade %lu", (unsigned long) c);
       q->casc[i] = (u8) c;
