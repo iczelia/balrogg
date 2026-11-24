@@ -1,11 +1,14 @@
 Release notes for balrogg. See the git log, or ChangeLog in a release package, for
 source-level changes.
 
+v1.7 (24-11-2026)
+- MOD, IT, S3M and XM module recompression.
+- Refuse Vorbis setups with a residue cascade bitflag set over zero high bits.
+
 v1.6 (12-11-2026)
 - Performance improvements.
 - Compression ratio improvements.
 - Mp3 recompression.
-- MOD module recompression.
 - New effort level scheme (-1 through -20).
 
 v1.5 (27-10-2026)
