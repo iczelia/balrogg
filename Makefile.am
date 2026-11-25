@@ -213,7 +213,7 @@ AM_TESTS_ENVIRONMENT = \
 BLR_TEST_BINARY = $(abs_top_builddir)/balrogg$(EXEEXT)
 
 EXTRA_DIST = \
-  bootstrap build-aux/version.sh README.md src/balrogg.rc src/balrogg.ico \
+  bootstrap build-aux/version.sh README.md CITATION.cff src/balrogg.rc src/balrogg.ico \
   src/opus/parse/README src/opus/parse/COPYING \
   $(BLR_VORBIS_PARTS) $(BLR_OPUS_PARTS) $(BLR_MP3_PARTS) $(BLR_IT_PARTS) \
   tests/t_harness.h tests/data tests/regress \
