@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use balrogg, please cite the following paper."
+title: balrogg
+authors:
+  - given-names: Kamila
+    family-names: Szewczyk
+repository-code: https://github.com/iczelia/balrogg
+preferred-citation:
+  type: article
+  title: Lossless Re-Encoding of Vorbis and Opus Audio Files
+  authors:
+    - given-names: Kamila
+      family-names: Szewczyk
+  journal: arXiv
+  year: 2026
+  doi: 10.48550/arXiv.2611.32641
+  url: https://arxiv.org/abs/2611.32641v1
